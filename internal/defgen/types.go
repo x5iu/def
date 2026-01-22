@@ -1,0 +1,198 @@
+package defgen
+
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+)
+
+// FieldInfo represents a struct field with its db tag mapping.
+type FieldInfo struct {
+	GoName string // Go field name, e.g., "ID"
+	DBName string // Database column name from db tag, e.g., "id"
+	Type   types.Type
+}
+
+// ForeignKeyInfo represents a foreign key relationship.
+type ForeignKeyInfo struct {
+	FieldName string     // Go field name, e.g., "User"
+	KeyColumn string     // Foreign key column, e.g., "user_id"
+	RefType   types.Type // Referenced type, e.g., *User
+}
+
+// TableBinding represents a type bound to a database table.
+type TableBinding struct {
+	Type        types.Type
+	TypeName    string           // e.g., "User"
+	TableName   string           // e.g., "users"
+	Fields      []FieldInfo      // db tag fields
+	ForeignKeys []ForeignKeyInfo // foreign_key tag fields
+}
+
+// ParamInfo represents a method parameter.
+type ParamInfo struct {
+	Name string
+	Type types.Type
+}
+
+// ReturnTypeInfo represents the return type of a query method.
+type ReturnTypeInfo struct {
+	Type       types.Type
+	IsSlice    bool   // true for []*T, false for *T
+	ElemType   types.Type
+	StructName string // e.g., "User" or "Project"
+}
+
+// QueryMethod represents a query method definition.
+type QueryMethod struct {
+	Name       string
+	Receiver   string // Receiver type name
+	Params     []ParamInfo
+	ReturnType ReturnTypeInfo
+	Columns    []ColumnExpr // SELECT columns, empty means SELECT *
+	Filters    []*FilterExpr
+	Pos        token.Pos
+}
+
+// FilterOperand represents one side of a filter expression.
+type FilterOperand struct {
+	IsParam   bool   // true if this is a parameter reference
+	IsLiteral bool   // true if this is a literal value
+	IsField   bool   // true if this is a field access
+	IsFunc    bool   // true if this is a function call
+	ParamName string // parameter name if IsParam
+	// Field access path
+	FieldPath []FieldPathElement
+	// Literal value
+	LiteralValue string
+	LiteralKind  token.Token // STRING, INT, FLOAT
+	// Function call
+	FuncName string    // Function name (COUNT, SUM, COALESCE, etc.)
+	FuncArgs []FuncArg // Function arguments
+}
+
+// FieldPathElement represents one element in a field access path.
+type FieldPathElement struct {
+	VarName      string // Variable name (only for first element)
+	FieldName    string // Field name
+	IsForeignKey bool   // true if this field is a foreign key
+	Type         types.Type
+}
+
+// FilterKind represents the type of a filter expression node.
+type FilterKind int
+
+const (
+	FilterComparison FilterKind = iota // Leaf: a == b
+	FilterIn                           // Leaf: def.In(a, b)
+	FilterAnd                          // Internal: expr && expr
+	FilterOr                           // Internal: expr || expr
+)
+
+// FilterExpr represents a filter expression tree node.
+type FilterExpr struct {
+	Kind FilterKind
+
+	// For comparison nodes (Kind == FilterComparison or FilterIn)
+	Left  FilterOperand
+	Op    token.Token // ==, !=, <, >, <=, >=
+	Right FilterOperand
+
+	// For boolean combination nodes (Kind == FilterAnd or FilterOr)
+	Children []*FilterExpr
+
+	Pos token.Pos
+}
+
+// FuncArg represents an argument to a SQL function.
+type FuncArg struct {
+	IsField   bool               // true if this is a field reference
+	IsLiteral bool               // true if this is a literal value
+	IsParam   bool               // true if this is a method parameter
+	FieldPath []FieldPathElement // Field path if IsField
+	Value     string             // Literal value or param name
+	Kind      token.Token        // Literal kind (STRING, INT, etc.)
+}
+
+// ColumnExpr represents a SELECT column expression.
+type ColumnExpr struct {
+	IsFunc    bool               // true if this is a function call
+	FuncName  string             // Function name: COUNT, SUM, DATE_FORMAT, etc.
+	FuncArgs  []FuncArg          // Function arguments
+	FieldPath []FieldPathElement // Field path if not a function (IsFunc=false)
+}
+
+// Package represents a parsed package with all def-related information.
+type Package struct {
+	Fset        *token.FileSet
+	PkgPath     string
+	PkgName     string
+	Tables      map[string]*TableBinding // TypeName -> TableBinding
+	Methods     []*QueryMethod
+	Interfaces  map[string]*InterfaceInfo // Interface name -> InterfaceInfo
+	TypesInfo   *types.Info
+	Syntax      []*ast.File
+	TypesPkg    *types.Package
+
+	// Relation-related generated content
+	RelationMethods  []*RelationMethod
+	CallbackMethods  []*CallbackMethod
+	SliceTypeAliases []*SliceTypeAlias
+}
+
+// InterfaceInfo represents an interface definition found in the source.
+type InterfaceInfo struct {
+	Name    string
+	Methods []InterfaceMethod
+	Pos     token.Pos
+}
+
+// InterfaceMethod represents a method in an interface.
+type InterfaceMethod struct {
+	Name       string
+	Signature  string // Full signature for output
+	Params     []ParamInfo
+	ReturnType ReturnTypeInfo
+}
+
+// GeneratedMethod represents a method to be generated with SQL comment.
+type GeneratedMethod struct {
+	Name      string
+	Signature string
+	SQL       string
+}
+
+// RelationMethod represents a private method for loading related data.
+type RelationMethod struct {
+	MethodName   string     // e.g., "getUserByID" or "getProjectsByUserID"
+	ParamName    string     // e.g., "id" or "userID"
+	ParamType    types.Type // e.g., int64
+	RefType      types.Type // e.g., *User or []*Project
+	RefTypeName  string     // e.g., "User" or "Project"
+	RefTableName string     // e.g., "users" or "projects"
+	WhereColumn  string     // e.g., "id" or "user_id"
+	IsSlice      bool       // true for one-to-many
+}
+
+// CallbackMethod represents a Callback implementation for a struct.
+type CallbackMethod struct {
+	StructName     string          // e.g., "Project"
+	StructTypeName string          // e.g., "*Project"
+	Fields         []CallbackField // fields to populate
+	IDField        *FieldInfo      // primary key field for caching
+}
+
+// CallbackField represents a field to populate in Callback.
+type CallbackField struct {
+	FieldName    string // e.g., "User"
+	MethodName   string // e.g., "getUserByID"
+	KeyFieldName string // e.g., "UserID"
+	IsSlice      bool   // true for one-to-many
+	CacheKey     string // e.g., "user_id" for building cache key
+}
+
+// SliceTypeAlias represents a slice type alias for Callback support.
+type SliceTypeAlias struct {
+	AliasName string // e.g., "Projects"
+	ElemType  string // e.g., "*Project"
+}
