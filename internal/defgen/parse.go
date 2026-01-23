@@ -104,24 +104,35 @@ func parseTableBindings(pkg *Package, structs map[string]*structInfo) error {
 					continue
 				}
 
-				typeName, tableName, ok := parseBindTableCall(pkg, argCall)
+				typeName, tableName, typeExpr, ok := parseBindTableCall(pkg, argCall)
 				if !ok {
 					continue
 				}
 
-				// Find the struct info
-				structInfo, ok := structs[typeName]
+				// Try to find struct info from local structs map first
+				si, ok := structs[typeName]
 				if !ok {
-					continue
+					// For external package types, get type info via TypesInfo
+					typeInfo := pkg.TypesInfo.TypeOf(typeExpr)
+					if typeInfo == nil {
+						continue
+					}
+					// Dynamically build structInfo from the type
+					si = getStructInfoFromType(typeInfo)
+					if si == nil {
+						continue
+					}
+					// Cache for later use (e.g., in parseFieldPath)
+					structs[typeName] = si
 				}
 
 				// Create table binding
 				binding := &TableBinding{
-					Type:        structInfo.typ,
+					Type:        si.typ,
 					TypeName:    typeName,
 					TableName:   tableName,
-					Fields:      structInfo.fields,
-					ForeignKeys: structInfo.foreignKeys,
+					Fields:      si.fields,
+					ForeignKeys: si.foreignKeys,
 				}
 				pkg.Tables[typeName] = binding
 			}
@@ -134,61 +145,69 @@ func parseTableBindings(pkg *Package, structs map[string]*structInfo) error {
 }
 
 // parseBindTableCall parses a def.BindTable[T]("table") call.
-// Returns (typeName, tableName, ok).
-func parseBindTableCall(pkg *Package, call *ast.CallExpr) (string, string, bool) {
+// Returns (typeName, tableName, typeExpr, ok).
+// typeExpr is the AST expression for the type parameter, used for TypesInfo lookup.
+func parseBindTableCall(pkg *Package, call *ast.CallExpr) (string, string, ast.Expr, bool) {
 	// The function should be an IndexExpr for generic: def.BindTable[T]
 	indexExpr, ok := call.Fun.(*ast.IndexExpr)
 	if !ok {
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	// Check if it's def.BindTable
 	sel, ok := indexExpr.X.(*ast.SelectorExpr)
 	if !ok {
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	if sel.Sel.Name != "BindTable" {
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	// Check if it's from the def package
 	ident, ok := sel.X.(*ast.Ident)
 	if !ok {
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	obj := pkg.TypesInfo.Uses[ident]
 	if obj == nil {
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	pkgName, ok := obj.(*types.PkgName)
 	if !ok || pkgName.Imported().Path() != defPkgPath {
-		return "", "", false
+		return "", "", nil, false
 	}
 
-	// Get the type parameter
-	typeIdent, ok := indexExpr.Index.(*ast.Ident)
-	if !ok {
-		return "", "", false
+	// Get the type parameter - support both local and external package types
+	var typeName string
+	typeExpr := indexExpr.Index
+	switch idx := typeExpr.(type) {
+	case *ast.Ident:
+		// Local package type: def.BindTable[User]
+		typeName = idx.Name
+	case *ast.SelectorExpr:
+		// External package type: def.BindTable[entity.User]
+		typeName = idx.Sel.Name
+	default:
+		return "", "", nil, false
 	}
-	typeName := typeIdent.Name
 
 	// Get the table name from the argument
 	if len(call.Args) != 1 {
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	lit, ok := call.Args[0].(*ast.BasicLit)
 	if !ok || lit.Kind != token.STRING {
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	// Remove quotes from string
 	tableName := strings.Trim(lit.Value, `"`)
 
-	return typeName, tableName, true
+	return typeName, tableName, typeExpr, true
 }
 
 // isDefCall checks if a call expression is a call to def.<funcName>.
@@ -761,10 +780,17 @@ done:
 		firstElem := path[0]
 		typeName := getTypeName(firstElem.Type)
 
-		structInfo, ok := structs[typeName]
-		if ok {
+		si, ok := structs[typeName]
+		if !ok {
+			// Try to dynamically build structInfo for external package types
+			si = getStructInfoFromType(firstElem.Type)
+			if si != nil {
+				structs[typeName] = si // Cache for later use
+			}
+		}
+		if si != nil {
 			// Walk through the path and mark foreign keys
-			currentStruct := structInfo
+			currentStruct := si
 			for i := 1; i < len(path); i++ {
 				fieldName := path[i].FieldName
 
@@ -777,7 +803,14 @@ done:
 					// Get the struct for the referenced type
 					refTypeName := getTypeName(fk.RefType)
 					refStruct, ok := structs[refTypeName]
-					if ok {
+					if !ok {
+						// Try to dynamically build structInfo for external package types
+						refStruct = getStructInfoFromType(fk.RefType)
+						if refStruct != nil {
+							structs[refTypeName] = refStruct
+						}
+					}
+					if refStruct != nil {
 						currentStruct = refStruct
 					}
 				} else {

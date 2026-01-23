@@ -122,6 +122,34 @@ type structInfo struct {
 	astNode     *ast.StructType
 }
 
+// getStructInfoFromType dynamically parses struct info from a types.Type.
+// This supports external package types without requiring pre-built struct maps.
+func getStructInfoFromType(t types.Type) *structInfo {
+	// Handle pointer types
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	named, ok := t.(*types.Named)
+	if !ok {
+		return nil
+	}
+
+	underlying, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return nil
+	}
+
+	fields, foreignKeys := parseStructTags(underlying)
+	return &structInfo{
+		name:        named.Obj().Name(),
+		typ:         named,
+		structType:  underlying,
+		fields:      fields,
+		foreignKeys: foreignKeys,
+	}
+}
+
 // getFieldByName finds a field in the struct by its Go name.
 func (s *structInfo) getFieldByName(name string) (FieldInfo, bool) {
 	for _, f := range s.fields {
