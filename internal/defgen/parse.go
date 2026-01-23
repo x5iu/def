@@ -13,8 +13,8 @@ import (
 
 const defPkgPath = "github.com/x5iu/def"
 
-// Load loads and parses a package.
-func Load(wd, pattern string) (*Package, error) {
+// Load loads and parses packages matching a pattern.
+func Load(wd, pattern string) ([]*Package, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
 			packages.NeedFiles |
@@ -25,41 +25,57 @@ func Load(wd, pattern string) (*Package, error) {
 		Dir: wd,
 	}
 
-	// Handle relative path
-	if !filepath.IsAbs(pattern) && pattern != "." {
+	// Normalize relative patterns for packages.Load.
+	//
+	// Examples:
+	//   internal/repo  -> ./internal/repo
+	//   .              -> .
+	//   ./...          -> ./...
+	if !filepath.IsAbs(pattern) && !strings.HasPrefix(pattern, ".") {
 		pattern = "./" + pattern
 	}
 
-	pkgs, err := packages.Load(cfg, pattern)
+	loadedPkgs, err := packages.Load(cfg, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load package: %w", err)
 	}
-
-	if len(pkgs) == 0 {
+	if len(loadedPkgs) == 0 {
 		return nil, fmt.Errorf("no packages found matching pattern: %s", pattern)
 	}
 
-	if len(pkgs[0].Errors) > 0 {
-		var errMsgs []string
-		for _, e := range pkgs[0].Errors {
+	// Collect type-checking / loading errors from all matched packages.
+	var errMsgs []string
+	for _, p := range loadedPkgs {
+		for _, e := range p.Errors {
 			errMsgs = append(errMsgs, e.Error())
 		}
+	}
+	if len(errMsgs) > 0 {
 		return nil, fmt.Errorf("package errors: %s", strings.Join(errMsgs, "; "))
 	}
 
-	loadedPkg := pkgs[0]
-	pkg := &Package{
-		Fset:       loadedPkg.Fset,
-		PkgPath:    loadedPkg.PkgPath,
-		PkgName:    loadedPkg.Name,
-		Tables:     make(map[string]*TableBinding),
-		Interfaces: make(map[string]*InterfaceInfo),
-		TypesInfo:  loadedPkg.TypesInfo,
-		Syntax:     loadedPkg.Syntax,
-		TypesPkg:   loadedPkg.Types,
+	pkgs := make([]*Package, 0, len(loadedPkgs))
+	for _, loadedPkg := range loadedPkgs {
+		dir := wd
+		if len(loadedPkg.GoFiles) > 0 {
+			dir = filepath.Dir(loadedPkg.GoFiles[0])
+		}
+
+		pkgs = append(pkgs, &Package{
+			Fset:    loadedPkg.Fset,
+			PkgPath: loadedPkg.PkgPath,
+			PkgName: loadedPkg.Name,
+			Dir:     dir,
+
+			Tables:     make(map[string]*TableBinding),
+			Interfaces: make(map[string]*InterfaceInfo),
+			TypesInfo:  loadedPkg.TypesInfo,
+			Syntax:     loadedPkg.Syntax,
+			TypesPkg:   loadedPkg.Types,
+		})
 	}
 
-	return pkg, nil
+	return pkgs, nil
 }
 
 // Parse parses a loaded package for def-related definitions.

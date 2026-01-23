@@ -26,6 +26,10 @@ def generate ./...
 def gen ./...
 ```
 
+When the pattern matches multiple packages (e.g. `./...`), `def` generates one output file per package directory.
+
+If `-o/--output` is provided, it is treated as a file name relative to each package directory (absolute paths are only supported for single-package patterns).
+
 ### CLI Options
 
 | Option | Short | Description |
@@ -296,7 +300,7 @@ type Querier interface {
     GetUserByID(ctx context.Context, id int64) (*User, error)
 
     // GetProjectByUsername query constbind
-    // SELECT * FROM projects WHERE (SELECT id FROM users WHERE name = ${username}) = user_id AND status = 'active'
+    // SELECT * FROM projects WHERE user_id IN (SELECT id FROM users WHERE name = ${username}) AND status = 'active'
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
 }
 ```
@@ -394,7 +398,7 @@ project.User.Name == username
 
 Generates a subquery:
 ```sql
-(SELECT id FROM users WHERE name = ${username}) = user_id
+user_id IN (SELECT id FROM users WHERE name = ${username})
 ```
 
 Where:
@@ -475,7 +479,7 @@ type Querier interface {
     GetUserByID(ctx context.Context, id int64) (*User, error)
 
     // GetProjectByUsername query constbind
-    // SELECT * FROM projects WHERE (SELECT id FROM users WHERE name = ${username}) = user_id AND status = 'active'
+    // SELECT * FROM projects WHERE user_id IN (SELECT id FROM users WHERE name = ${username}) AND status = 'active'
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
 }
 ```

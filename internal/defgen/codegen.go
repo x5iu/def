@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/tools/imports"
 )
 
 // GenerateOptions contains options for code generation.
@@ -19,62 +21,75 @@ type GenerateOptions struct {
 	Tags string
 }
 
-// Generate generates code for a package.
+// Generate generates code for packages matching the given pattern.
 func Generate(wd, pattern string, opts *GenerateOptions) error {
 	if opts == nil {
 		opts = &GenerateOptions{}
 	}
 
-	// Load the package
-	pkg, err := Load(wd, pattern)
+	pkgs, err := Load(wd, pattern)
 	if err != nil {
 		return err
 	}
-
-	// Parse def-related definitions
-	if err := Parse(pkg); err != nil {
-		return err
-	}
-
-	// If no methods found, nothing to generate
-	if len(pkg.Methods) == 0 {
+	if len(pkgs) == 0 {
 		return nil
 	}
 
-	// Generate the code
-	code, err := generateCode(pkg, opts)
-	if err != nil {
-		return err
+	// When generating for multiple packages (e.g., ./...), absolute output paths would cause overwrites.
+	if len(pkgs) > 1 && opts.Output != "" && filepath.IsAbs(opts.Output) {
+		return fmt.Errorf("absolute output path is not supported when pattern matches multiple packages: %s", opts.Output)
 	}
 
-	// Determine output path
-	outputPath := opts.Output
-	if outputPath == "" {
-		outputPath = determineOutputPath(wd, pattern)
-	} else if !filepath.IsAbs(outputPath) {
-		// If relative path, make it relative to the package directory
-		pkgDir := pattern
-		if !filepath.IsAbs(pkgDir) {
-			pkgDir = filepath.Join(wd, pattern)
+	for _, pkg := range pkgs {
+		// Parse def-related definitions
+		if err := Parse(pkg); err != nil {
+			return fmt.Errorf("%s: %w", pkg.PkgPath, err)
 		}
-		outputPath = filepath.Join(pkgDir, outputPath)
-	}
 
-	// Write the file
-	if err := os.WriteFile(outputPath, code, 0o644); err != nil {
-		return fmt.Errorf("failed to write output file: %w", err)
+		// If no methods found, nothing to generate for this package.
+		if len(pkg.Methods) == 0 {
+			continue
+		}
+
+		outputPath, err := determineOutputPath(pkg, opts.Output)
+		if err != nil {
+			return err
+		}
+
+		// Generate the code
+		code, err := generateCode(pkg, opts)
+		if err != nil {
+			return err
+		}
+
+		// Fix imports and format using goimports.
+		code, err = imports.Process(outputPath, code, &imports.Options{
+			Comments:  true,
+			TabIndent: true,
+			TabWidth:  8,
+		})
+		if err != nil {
+			return fmt.Errorf("goimports failed for %s: %w", outputPath, err)
+		}
+
+		// Write the file
+		if err := os.WriteFile(outputPath, code, 0o644); err != nil {
+			return fmt.Errorf("failed to write output file: %w", err)
+		}
 	}
 
 	return nil
 }
 
 // determineOutputPath determines the output file path.
-func determineOutputPath(wd, pattern string) string {
-	dir := pattern
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(wd, pattern)
+func determineOutputPath(pkg *Package, outputOpt string) (string, error) {
+	if outputOpt == "" {
+		return filepath.Join(pkg.Dir, "def_gen.go"), nil
 	}
-	return filepath.Join(dir, "def_gen.go")
+	if filepath.IsAbs(outputOpt) {
+		return outputOpt, nil
+	}
+	return filepath.Join(pkg.Dir, outputOpt), nil
 }
 
 // generateCode generates the code content.
@@ -379,17 +394,31 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 	for _, field := range cb.Fields {
 		if field.IsSlice {
 			// One-to-many: check cache then query
-			aliasName := strings.TrimSuffix(field.FieldName, "s") + "s"
+			aliasName := field.FieldName
 			sb.WriteString(fmt.Sprintf("\tif cached, ok := getCache[%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); ok {\n",
 				aliasName, field.CacheKey, receiverName, field.KeyFieldName))
-			sb.WriteString(fmt.Sprintf("\t\t%s.%s = cached\n", receiverName, field.FieldName))
+			if field.FieldIsAlias {
+				sb.WriteString(fmt.Sprintf("\t\t%s.%s = cached\n", receiverName, field.FieldName))
+			} else {
+				sb.WriteString(fmt.Sprintf("\t\t%s.%s = %s(cached)\n", receiverName, field.FieldName, field.SliceType))
+			}
 			sb.WriteString("\t} else {\n")
 			sb.WriteString("\t\tvar err error\n")
-			sb.WriteString(fmt.Sprintf("\t\t%s.%s, err = q.%s(ctx, %s.%s)\n",
-				receiverName, field.FieldName, field.MethodName, receiverName, field.KeyFieldName))
-			sb.WriteString("\t\tif err != nil {\n")
-			sb.WriteString("\t\t\treturn err\n")
-			sb.WriteString("\t\t}\n")
+			if field.FieldIsAlias {
+				sb.WriteString(fmt.Sprintf("\t\tvar tmp %s\n", field.SliceType))
+				sb.WriteString(fmt.Sprintf("\t\ttmp, err = q.%s(ctx, %s.%s)\n",
+					field.MethodName, receiverName, field.KeyFieldName))
+				sb.WriteString("\t\tif err != nil {\n")
+				sb.WriteString("\t\t\treturn err\n")
+				sb.WriteString("\t\t}\n")
+				sb.WriteString(fmt.Sprintf("\t\t%s.%s = %s(tmp)\n", receiverName, field.FieldName, aliasName))
+			} else {
+				sb.WriteString(fmt.Sprintf("\t\t%s.%s, err = q.%s(ctx, %s.%s)\n",
+					receiverName, field.FieldName, field.MethodName, receiverName, field.KeyFieldName))
+				sb.WriteString("\t\tif err != nil {\n")
+				sb.WriteString("\t\t\treturn err\n")
+				sb.WriteString("\t\t}\n")
+			}
 			sb.WriteString(fmt.Sprintf("\t\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s(%s.%s))\n",
 				field.CacheKey, receiverName, field.KeyFieldName, aliasName, receiverName, field.FieldName))
 			sb.WriteString("\t}\n\n")

@@ -124,15 +124,17 @@ type ColumnExpr struct {
 
 // Package represents a parsed package with all def-related information.
 type Package struct {
-	Fset        *token.FileSet
-	PkgPath     string
-	PkgName     string
-	Tables      map[string]*TableBinding // TypeName -> TableBinding
-	Methods     []*QueryMethod
-	Interfaces  map[string]*InterfaceInfo // Interface name -> InterfaceInfo
-	TypesInfo   *types.Info
-	Syntax      []*ast.File
-	TypesPkg    *types.Package
+	Fset    *token.FileSet
+	PkgPath string
+	PkgName string
+	Dir     string
+
+	Tables     map[string]*TableBinding // TypeName -> TableBinding
+	Methods    []*QueryMethod
+	Interfaces map[string]*InterfaceInfo // Interface name -> InterfaceInfo
+	TypesInfo  *types.Info
+	Syntax     []*ast.File
+	TypesPkg   *types.Package
 
 	// Relation-related generated content
 	RelationMethods  []*RelationMethod
@@ -189,6 +191,11 @@ type CallbackField struct {
 	KeyFieldName string // e.g., "UserID"
 	IsSlice      bool   // true for one-to-many
 	CacheKey     string // e.g., "user_id" for building cache key
+
+	// For slice fields (has-many), SliceType is the underlying slice type (e.g., "[]*Project").
+	// FieldIsAlias indicates whether the struct field type is the generated alias type (e.g., "Projects").
+	SliceType    string
+	FieldIsAlias bool
 }
 
 // SliceTypeAlias represents a slice type alias for Callback support.

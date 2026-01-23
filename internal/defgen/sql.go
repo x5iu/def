@@ -167,23 +167,42 @@ func formatFilterTree(filter *AnalyzedFilter) string {
 		return "(" + strings.Join(parts, " OR ") + ")"
 
 	case AnalyzedFilterIn:
+		if filter.IsSubquery {
+			value := filter.SubqueryValue
+			if value == "" {
+				value = filter.Value
+			}
+			return fmt.Sprintf("%s IN (SELECT %s FROM %s WHERE %s IN (%s))",
+				filter.ForeignKeyCol,
+				filter.SubqueryIDField,
+				filter.SubqueryTable,
+				filter.SubqueryColumn,
+				value,
+			)
+		}
 		// Format: column IN (${param})
 		return fmt.Sprintf("%s IN (%s)", filter.ColumnName, filter.Value)
 
 	case AnalyzedFilterComparison:
-		// Build left side
-		var leftSide string
-		if filter.LeftIsFunc {
-			leftSide = filter.LeftFuncExpr
-		} else if filter.IsSubquery {
-			// Format: (SELECT id FROM table WHERE column = value)
-			leftSide = fmt.Sprintf("(SELECT %s FROM %s WHERE %s %s %s)",
+		if filter.IsSubquery {
+			value := filter.SubqueryValue
+			if value == "" && filter.RightIsFunc {
+				value = filter.RightFuncExpr
+			}
+			return fmt.Sprintf("%s IN (SELECT %s FROM %s WHERE %s %s %s)",
+				filter.ForeignKeyCol,
 				filter.SubqueryIDField,
 				filter.SubqueryTable,
 				filter.SubqueryColumn,
 				filter.Operator,
-				filter.SubqueryValue,
+				value,
 			)
+		}
+
+		// Build left side
+		var leftSide string
+		if filter.LeftIsFunc {
+			leftSide = filter.LeftFuncExpr
 		} else {
 			leftSide = filter.ColumnName
 		}
@@ -192,16 +211,10 @@ func formatFilterTree(filter *AnalyzedFilter) string {
 		var rightSide string
 		if filter.RightIsFunc {
 			rightSide = filter.RightFuncExpr
-		} else if filter.IsSubquery {
-			rightSide = filter.ForeignKeyCol
 		} else {
 			rightSide = filter.Value
 		}
 
-		// For subquery, the comparison is already handled
-		if filter.IsSubquery {
-			return fmt.Sprintf("%s = %s", leftSide, filter.ForeignKeyCol)
-		}
 		return fmt.Sprintf("%s %s %s", leftSide, filter.Operator, rightSide)
 
 	default:

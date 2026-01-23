@@ -213,17 +213,35 @@ func addHasManyCallbackField(pkg *Package, callbackMap map[string]*CallbackMetho
 	// Find the plural field name in the referenced table (e.g., Projects in User)
 	pluralFieldName := sourceTable.TypeName + "s"
 
-	// Check if this field exists in the refTable
-	hasField := false
-	for i := 0; i < refTable.Type.Underlying().(*types.Struct).NumFields(); i++ {
-		field := refTable.Type.Underlying().(*types.Struct).Field(i)
+	// Check if this field exists in the refTable and capture its type
+	var hasManyFieldType types.Type
+	refStruct, ok := refTable.Type.Underlying().(*types.Struct)
+	if !ok {
+		return
+	}
+	for i := 0; i < refStruct.NumFields(); i++ {
+		field := refStruct.Field(i)
 		if field.Name() == pluralFieldName {
-			hasField = true
+			hasManyFieldType = field.Type()
 			break
 		}
 	}
-	if !hasField {
+	if hasManyFieldType == nil {
 		return
+	}
+
+	// Determine whether the has-many field uses the generated alias type (e.g., Projects) or a raw slice (e.g., []*Project).
+	fieldIsAlias := false
+	sliceType := ""
+	switch t := hasManyFieldType.(type) {
+	case *types.Named:
+		fieldIsAlias = t.Obj().Name() == pluralFieldName
+		sliceType = formatType(pkg, t.Underlying())
+	case *types.Slice:
+		fieldIsAlias = false
+		sliceType = formatType(pkg, t)
+	default:
+		sliceType = formatType(pkg, hasManyFieldType)
 	}
 
 	// Get or create the callback for the referenced table
@@ -263,11 +281,13 @@ func addHasManyCallbackField(pkg *Package, callbackMap map[string]*CallbackMetho
 	methodName := "get" + sourceTable.TypeName + "sBy" + ucFirst(paramName)
 
 	cb.Fields = append(cb.Fields, CallbackField{
-		FieldName:    pluralFieldName,
-		MethodName:   methodName,
-		KeyFieldName: idFieldName,
-		IsSlice:      true,
-		CacheKey:     fk.KeyColumn,
+		FieldName:     pluralFieldName,
+		MethodName:    methodName,
+		KeyFieldName:  idFieldName,
+		IsSlice:       true,
+		CacheKey:      fk.KeyColumn,
+		SliceType:     sliceType,
+		FieldIsAlias:  fieldIsAlias,
 	})
 }
 

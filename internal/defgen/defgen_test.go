@@ -119,7 +119,7 @@ func TestFormatFilterTree(t *testing.T) {
 				SubqueryIDField: "id",
 				Operator:        "=",
 			},
-			want: "(SELECT id FROM users WHERE name = ${username}) = user_id",
+			want: "user_id IN (SELECT id FROM users WHERE name = ${username})",
 		},
 		{
 			name: "IN query",
