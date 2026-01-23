@@ -39,11 +39,10 @@ def gen ./...
 # Custom output file
 def generate -o query_gen.go .
 
-# Add build tags (generates both //go:build and // +build)
+# Add build tags
 def generate --tags "!test" .
 # Output:
 #   //go:build !test
-#   // +build !test
 
 # Combine options
 def generate -o query_gen.go --tags "!test" .

@@ -88,8 +88,7 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 
 	// Write build tags if specified
 	if opts.Tags != "" {
-		buf.WriteString(fmt.Sprintf("//go:build %s\n", opts.Tags))
-		buf.WriteString(fmt.Sprintf("// +build %s\n\n", opts.Tags))
+		buf.WriteString(fmt.Sprintf("//go:build %s\n\n", opts.Tags))
 	}
 
 	// Write package declaration
