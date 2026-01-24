@@ -297,7 +297,7 @@ def.Delete(                                     // DELETE FROM users
     def.Filter(user.Status == "inactive"),      // WHERE status = 'inactive' AND age > ${minAge}
     def.Filter(user.Age > minAge),
 )
-def.Delete()                                    // DELETE FROM users (deletes all - use with caution!)
+// Note: Delete requires at least one Filter argument (enforced at compile time)
 ```
 
 ## Generated Output Example

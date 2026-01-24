@@ -63,16 +63,15 @@ func Func[T any](string, ...any) T { var zero T; return zero }
 func Create(...any) any { return nil }
 
 // Update defines an UPDATE operation.
-// It takes Set expressions for the columns to update and optional Filter expressions for the WHERE clause.
+// It requires at least one Set expression for the columns to update, and optional Filter expressions for the WHERE clause.
 // Example: def.Update(def.Set(user.Name, name), def.Filter(user.ID == id))
 // generates "UPDATE users SET name = ${name} WHERE id = ${id}"
-func Update(...any) any { return nil }
+func Update(any, ...any) any { return nil }
 
 // Delete defines a DELETE operation.
-// It takes optional Filter expressions for the WHERE clause.
+// It requires at least one Filter expression to prevent accidental full table deletion.
 // Example: def.Delete(def.Filter(user.ID == id)) generates "DELETE FROM users WHERE id = ${id}"
-// Without filter: def.Delete() generates "DELETE FROM users"
-func Delete(...any) any { return nil }
+func Delete(any, ...any) any { return nil }
 
 // Set specifies a column assignment for Create or Update operations.
 // First argument is the field reference (e.g., user.Name), second is the value.

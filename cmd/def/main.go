@@ -17,12 +17,12 @@ func main() {
 		Use:   "def",
 		Short: "SQL query code generator for Go",
 		Long: `def is a code generation tool similar to Google Wire that scans Go code
-with def.Query + def.Filter definitions and generates interface definitions
-with SQL comments.
+with def.Query, def.Create, def.Update, def.Delete definitions and generates
+interface definitions with SQL comments.
 
 It parses struct definitions with 'db' and 'foreign_key' tags, reads table
 bindings from def.Init + def.BindTable[T]("table") calls, and analyzes
-def.Query + def.Filter expressions to generate SQL WHERE clauses.`,
+expressions to generate SQL statements (SELECT, INSERT, UPDATE, DELETE).`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
@@ -32,9 +32,9 @@ def.Query + def.Filter expressions to generate SQL WHERE clauses.`,
 
 	generateCmd := &cobra.Command{
 		Use:   "generate [patterns...]",
-		Short: "Generate SQL query interface code",
-		Long: `Generate interface definitions with SQL comments from def.Query + def.Filter
-definitions in Go source files.
+		Short: "Generate SQL interface code",
+		Long: `Generate interface definitions with SQL comments from def.Query, def.Create,
+def.Update, def.Delete definitions in Go source files.
 
 Examples:
   def generate ./...              Generate code for all packages
@@ -43,15 +43,27 @@ Examples:
   def generate -o query_gen.go .  Generate to custom output file
   def generate --tags "!test" .   Generate with build tags
 
-Supported filter expressions:
-  - Comparison: user.ID == id, user.Age > 18
-  - Literals: user.Status == "active", user.Age == 18
-  - IN query: def.In(user.ID, ids)
-  - AND: user.Status == "active" && user.ID == id
-  - OR: user.Status == "active" || user.Status == "pending"
-  - Nested: (a == b && c == d) || e == f
-  - Foreign key: project.User.Name == username (generates subquery)
-  - Functions: def.Count[int64](t.ID) > 0, def.Func[string]("COALESCE", user.Name, "x") != "x"`,
+Supported expressions:
+  Query (SELECT):
+    - def.Query(def.Filter(user.ID == id))
+    - def.Column(user.Name), def.Column(def.Count(user.ID))
+
+  Create (INSERT):
+    - def.Create(user)                          // entity mode
+    - def.Create(def.Set(user.Name, name), ...) // field mode
+
+  Update:
+    - def.Update(def.Set(user.Name, name), def.Filter(user.ID == id))
+
+  Delete:
+    - def.Delete(def.Filter(user.ID == id))
+
+  Filter expressions:
+    - Comparison: user.ID == id, user.Age > 18
+    - Literals: user.Status == "active"
+    - IN query: def.In(user.ID, ids)
+    - Boolean: a && b, a || b, (a && b) || c
+    - Foreign key: project.User.Name == name (generates subquery)`,
 		Aliases: []string{"gen"},
 		Args:    cobra.ArbitraryArgs,
 		Run: func(cmd *cobra.Command, args []string) {

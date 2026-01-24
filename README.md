@@ -367,15 +367,7 @@ func (q *querier) DeleteInactiveUsers(ctx context.Context, status string, maxAge
 // Generates: DELETE FROM users WHERE status = ${status} AND age > ${maxAge}
 ```
 
-**Warning**: Delete without filter deletes all rows:
-
-```go
-func (q *querier) DeleteAllUsers(ctx context.Context) (sql.Result, error) {
-    var user User
-    return def.Delete()
-}
-// Generates: DELETE FROM users
-```
+**Note**: Delete requires at least one Filter argument to prevent accidental full table deletion (enforced at compile time).
 
 ## Output Format Specification
 
