@@ -53,6 +53,8 @@ type QueryMethod struct {
 	ReturnType ReturnTypeInfo
 	Columns    []ColumnExpr // SELECT columns, empty means SELECT *
 	Filters    []*FilterExpr
+	Limit      *PaginationExpr // LIMIT expression, nil means no LIMIT
+	Offset     *PaginationExpr // OFFSET expression, nil means no OFFSET
 	Pos        token.Pos
 }
 
@@ -132,6 +134,13 @@ type ColumnExpr struct {
 	FuncName  string             // Function name: COUNT, SUM, DATE_FORMAT, etc.
 	FuncArgs  []FuncArg          // Function arguments
 	FieldPath []FieldPathElement // Field path if not a function (IsFunc=false)
+}
+
+// PaginationExpr represents a LIMIT or OFFSET expression.
+type PaginationExpr struct {
+	IsParam   bool   // true if using a method parameter
+	ParamName string // parameter name if IsParam is true
+	Value     int64  // literal value if IsParam is false
 }
 
 // SetExpr represents a SET clause assignment in INSERT/UPDATE operations.

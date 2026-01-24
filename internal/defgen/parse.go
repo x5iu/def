@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -389,13 +390,15 @@ func parseQueryMethod(pkg *Package, fn *ast.FuncDecl, queryCall *ast.CallExpr, s
 		method.ReturnType = analyzeReturnType(resultType)
 	}
 
-	// Parse columns and filters from def.Query call
-	columns, filters, err := parseQueryArgs(pkg, queryCall, structs, method.Params)
+	// Parse columns, filters, limit, and offset from def.Query call
+	columns, filters, limit, offset, err := parseQueryArgs(pkg, queryCall, structs, method.Params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse query args: %w", err)
 	}
 	method.Columns = columns
 	method.Filters = filters
+	method.Limit = limit
+	method.Offset = offset
 
 	return method, nil
 }
@@ -423,10 +426,12 @@ func isContextType(t types.Type) bool {
 		named.Obj().Name() == "Context"
 }
 
-// parseQueryArgs parses def.Column and def.Filter calls within a def.Query call.
-func parseQueryArgs(pkg *Package, queryCall *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) ([]ColumnExpr, []*FilterExpr, error) {
+// parseQueryArgs parses def.Column, def.Filter, def.Limit, and def.Offset calls within a def.Query call.
+func parseQueryArgs(pkg *Package, queryCall *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) ([]ColumnExpr, []*FilterExpr, *PaginationExpr, *PaginationExpr, error) {
 	var columns []ColumnExpr
 	var filters []*FilterExpr
+	var limit *PaginationExpr
+	var offset *PaginationExpr
 
 	for _, arg := range queryCall.Args {
 		call, ok := arg.(*ast.CallExpr)
@@ -441,7 +446,7 @@ func parseQueryArgs(pkg *Package, queryCall *ast.CallExpr, structs map[string]*s
 			}
 			col, err := parseColumnExpr(pkg, call.Args[0], structs, params)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to parse column: %w", err)
+				return nil, nil, nil, nil, fmt.Errorf("failed to parse column: %w", err)
 			}
 			columns = append(columns, col)
 			continue
@@ -450,17 +455,71 @@ func parseQueryArgs(pkg *Package, queryCall *ast.CallExpr, structs map[string]*s
 		// Check if it's a def.Filter call
 		if isDefCall(pkg, call, "Filter") {
 			if len(call.Args) != 1 {
-				return nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
+				return nil, nil, nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
 			}
 			filter, err := parseFilterExprRecursive(pkg, call.Args[0], structs, params)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			filters = append(filters, filter)
+			continue
+		}
+
+		// Check if it's a def.Limit call
+		if isDefCall(pkg, call, "Limit") {
+			expr, err := parsePaginationExpr(call, params)
+			if err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("failed to parse Limit: %w", err)
+			}
+			limit = expr
+			continue
+		}
+
+		// Check if it's a def.Offset call
+		if isDefCall(pkg, call, "Offset") {
+			expr, err := parsePaginationExpr(call, params)
+			if err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("failed to parse Offset: %w", err)
+			}
+			offset = expr
+			continue
 		}
 	}
 
-	return columns, filters, nil
+	return columns, filters, limit, offset, nil
+}
+
+// parsePaginationExpr parses a Limit or Offset argument.
+// It can be either:
+// - An integer literal: def.Limit(10)
+// - A parameter reference: def.Limit(pageSize)
+func parsePaginationExpr(call *ast.CallExpr, params []ParamInfo) (*PaginationExpr, error) {
+	if len(call.Args) != 1 {
+		return nil, fmt.Errorf("expected exactly 1 argument")
+	}
+
+	arg := call.Args[0]
+
+	// Check for integer literal
+	if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.INT {
+		value, err := strconv.ParseInt(lit.Value, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid integer literal: %w", err)
+		}
+		return &PaginationExpr{Value: value}, nil
+	}
+
+	// Check for parameter reference
+	if ident, ok := arg.(*ast.Ident); ok {
+		for _, param := range params {
+			if param.Name == ident.Name {
+				return &PaginationExpr{IsParam: true, ParamName: param.Name}, nil
+			}
+		}
+		return nil, fmt.Errorf("unknown identifier: %s", ident.Name)
+	}
+
+	return nil, fmt.Errorf("argument must be integer literal or parameter")
 }
 
 // parseColumnExpr parses a column expression inside def.Column().

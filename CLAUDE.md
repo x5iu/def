@@ -76,7 +76,7 @@ Scanning happens in 5 steps:
 #### Step 4: `parseQueryMethods()`
 - Finds methods containing `def.Query(...)` calls
 - Parses method receiver, parameters, return type
-- Extracts `def.Column(...)` and `def.Filter(...)` from arguments
+- Extracts `def.Column(...)`, `def.Filter(...)`, `def.Limit(...)`, and `def.Offset(...)` from arguments
 - Stores in `pkg.Methods`
 
 #### Step 5: `parseMutationMethods()`
@@ -115,6 +115,12 @@ Parses `def.Set(field, value)` calls for INSERT/UPDATE:
 - Second argument is a parameter or literal value
 - Returns `SetExpr` with field path and value
 
+#### Pagination Expression: `parsePaginationExpr()`
+Parses `def.Limit(n)` and `def.Offset(n)` calls:
+- Supports integer literals: `def.Limit(10)` → `LIMIT 10`
+- Supports parameter references: `def.Limit(pageSize)` → `LIMIT ${pageSize}`
+- Returns `PaginationExpr` with value or parameter name
+
 ### 5. Filter Analysis
 
 **File**: `internal/defgen/analyze.go`
@@ -147,6 +153,9 @@ Generates complete SQL statement:
 3. Build WHERE clause:
    - Call `AnalyzeFilter()` for each filter
    - Call `formatFilterTree()` to produce SQL string
+4. Build LIMIT/OFFSET clause:
+   - Literal values: `LIMIT 10`
+   - Parameter references: `LIMIT ${pageSize}`
 
 **Function**: `formatFilterTree(filter *AnalyzedFilter) string`
 
@@ -205,10 +214,11 @@ Output is formatted with `go/format`.
 |------|-------------|
 | `Package` | Parsed package with tables, methods, interfaces |
 | `TableBinding` | Type-to-table mapping with fields and foreign keys |
-| `QueryMethod` | Method definition with columns and filters |
+| `QueryMethod` | Method definition with columns, filters, limit, and offset |
 | `MutationMethod` | Method definition for INSERT/UPDATE/DELETE |
 | `FilterExpr` | Filter expression tree node |
 | `ColumnExpr` | SELECT column expression |
+| `PaginationExpr` | LIMIT or OFFSET expression (literal or parameter) |
 | `SetExpr` | SET clause assignment expression |
 | `SetValue` | Value in a SET assignment |
 | `FieldPathElement` | Element in field access path (e.g., `project.User.Name`) |
@@ -262,6 +272,14 @@ def.Filter(project.User.Name == name)  // Foreign key (generates subquery)
 def.Column(user.Name)                           // Field reference
 def.Column(def.Count(user.ID))                  // Aggregate
 def.Column(def.Func[string]("COALESCE", user.Name, "default"))  // Custom function
+```
+
+### Pagination Expressions
+```go
+def.Limit(10)                                   // LIMIT 10
+def.Limit(pageSize)                             // LIMIT ${pageSize}
+def.Offset(20)                                  // OFFSET 20
+def.Offset(offset)                              // OFFSET ${offset}
 ```
 
 ### Create Expressions (INSERT)
@@ -325,6 +343,19 @@ type UserRepository interface {
     // WHERE status = 'active'
     //   AND age > ${minAge}
     FindByStatus(ctx context.Context, minAge int) ([]*User, error)
+
+    // FindByPage query constbind
+    // SELECT *
+    // FROM users
+    // WHERE status = ${status}
+    // LIMIT ${limit} OFFSET ${offset}
+    FindByPage(ctx context.Context, status string, limit, offset int) ([]*User, error)
+
+    // FindTop10 query constbind
+    // SELECT *
+    // FROM users
+    // LIMIT 10
+    FindTop10(ctx context.Context) ([]*User, error)
 
     // CreateUser exec constbind
     // INSERT INTO users (id, name, age)

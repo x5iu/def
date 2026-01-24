@@ -47,6 +47,7 @@ Supported expressions:
   Query (SELECT):
     - def.Query(def.Filter(user.ID == id))
     - def.Column(user.Name), def.Column(def.Count(user.ID))
+    - def.Limit(10), def.Offset(20), def.Limit(pageSize)
 
   Create (INSERT):
     - def.Create(user)                          // entity mode

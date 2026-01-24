@@ -166,6 +166,45 @@ func (q *querier) GetUserBasic(ctx context.Context, id int64) (name string, age 
 // Generates: SELECT name, age FROM users WHERE id = ${id}
 ```
 
+### Pagination (LIMIT/OFFSET)
+
+Use `def.Limit` and `def.Offset` for pagination:
+
+```go
+// With literal values
+func (q *querier) GetTop10Users(ctx context.Context) ([]*User, error) {
+    var user User
+    def.Query(
+        def.Limit(10),
+    )
+    return nil, nil
+}
+// Generates: SELECT * FROM users LIMIT 10
+
+// With parameters
+func (q *querier) GetUsersByPage(ctx context.Context, limit, offset int) ([]*User, error) {
+    var user User
+    def.Query(
+        def.Limit(limit),
+        def.Offset(offset),
+    )
+    return nil, nil
+}
+// Generates: SELECT * FROM users LIMIT ${limit} OFFSET ${offset}
+
+// Combined with filter
+func (q *querier) GetActiveUsersByPage(ctx context.Context, status string, limit, offset int) ([]*User, error) {
+    var user User
+    def.Query(
+        def.Filter(user.Status == status),
+        def.Limit(limit),
+        def.Offset(offset),
+    )
+    return nil, nil
+}
+// Generates: SELECT * FROM users WHERE status = ${status} LIMIT ${limit} OFFSET ${offset}
+```
+
 ### Aggregate Functions
 
 Built-in aggregate functions: `def.Count`, `def.Sum`, `def.Avg`, `def.Max`, `def.Min`

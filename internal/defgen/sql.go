@@ -50,6 +50,24 @@ func GenerateSQL(pkg *Package, method *QueryMethod) (string, error) {
 		sql += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
+	// Add LIMIT clause
+	if method.Limit != nil {
+		if method.Limit.IsParam {
+			sql += fmt.Sprintf(" LIMIT ${%s}", method.Limit.ParamName)
+		} else {
+			sql += fmt.Sprintf(" LIMIT %d", method.Limit.Value)
+		}
+	}
+
+	// Add OFFSET clause
+	if method.Offset != nil {
+		if method.Offset.IsParam {
+			sql += fmt.Sprintf(" OFFSET ${%s}", method.Offset.ParamName)
+		} else {
+			sql += fmt.Sprintf(" OFFSET %d", method.Offset.Value)
+		}
+	}
+
 	return sql, nil
 }
 
@@ -536,8 +554,17 @@ func formatSelectSQL(sql string) string {
 	wherePos := findKeywordOutsideSubquery(remaining, " WHERE ")
 
 	if wherePos == -1 {
-		// No WHERE clause
-		result.WriteString(strings.TrimSpace(remaining))
+		// No WHERE clause, check for LIMIT/OFFSET
+		limitPos := findKeywordOutsideSubquery(remaining, " LIMIT ")
+		if limitPos == -1 {
+			result.WriteString(strings.TrimSpace(remaining))
+			return result.String()
+		}
+		// FROM ... part
+		result.WriteString(strings.TrimSpace(remaining[:limitPos]))
+		result.WriteString("\n")
+		// LIMIT/OFFSET clause
+		result.WriteString(strings.TrimSpace(remaining[limitPos+1:]))
 		return result.String()
 	}
 
@@ -545,9 +572,21 @@ func formatSelectSQL(sql string) string {
 	result.WriteString(strings.TrimSpace(remaining[:wherePos]))
 	result.WriteString("\n")
 
-	// WHERE clause
+	// WHERE clause (may include LIMIT/OFFSET)
 	whereClause := strings.TrimSpace(remaining[wherePos+1:]) // skip the leading space
-	result.WriteString(formatWhereClause(whereClause))
+
+	// Check for LIMIT in where clause
+	limitPos := findKeywordOutsideSubquery(whereClause, " LIMIT ")
+	if limitPos == -1 {
+		result.WriteString(formatWhereClause(whereClause))
+		return result.String()
+	}
+
+	// WHERE ... part
+	result.WriteString(formatWhereClause(strings.TrimSpace(whereClause[:limitPos])))
+	result.WriteString("\n")
+	// LIMIT/OFFSET clause
+	result.WriteString(strings.TrimSpace(whereClause[limitPos+1:]))
 
 	return result.String()
 }

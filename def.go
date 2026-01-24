@@ -86,3 +86,13 @@ func Delete(any, ...any) any { return nil }
 // First argument is the field reference (e.g., user.Name), second is the value.
 // Example: def.Set(user.Name, name) generates "name = ${name}"
 func Set(any, any) any { return nil }
+
+// Limit specifies the maximum number of rows to return.
+// Example: def.Limit(10) generates "LIMIT 10"
+// Example: def.Limit(pageSize) generates "LIMIT ${pageSize}"
+func Limit(int) any { return nil }
+
+// Offset specifies the number of rows to skip before returning results.
+// Example: def.Offset(20) generates "OFFSET 20"
+// Example: def.Offset(offset) generates "OFFSET ${offset}"
+func Offset(int) any { return nil }
