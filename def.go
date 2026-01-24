@@ -54,3 +54,27 @@ func Min[T any](any) T { var zero T; return zero }
 // Example: def.Filter(def.Func[string]("COALESCE", user.Name, "Unknown") != "Unknown")
 // generates "WHERE COALESCE(name, 'Unknown') != 'Unknown'"
 func Func[T any](string, ...any) T { var zero T; return zero }
+
+// Create defines an INSERT operation.
+// It can take either a struct pointer (entity mode) or Set expressions (field mode).
+// Entity mode example: def.Create(user) generates "INSERT INTO users #bind(user)"
+// Field mode example: def.Create(def.Set(user.Name, name), def.Set(user.Age, age))
+// generates "INSERT INTO users (name, age) VALUES (${name}, ${age})"
+func Create(...any) any { return nil }
+
+// Update defines an UPDATE operation.
+// It takes Set expressions for the columns to update and optional Filter expressions for the WHERE clause.
+// Example: def.Update(def.Set(user.Name, name), def.Filter(user.ID == id))
+// generates "UPDATE users SET name = ${name} WHERE id = ${id}"
+func Update(...any) any { return nil }
+
+// Delete defines a DELETE operation.
+// It takes optional Filter expressions for the WHERE clause.
+// Example: def.Delete(def.Filter(user.ID == id)) generates "DELETE FROM users WHERE id = ${id}"
+// Without filter: def.Delete() generates "DELETE FROM users"
+func Delete(...any) any { return nil }
+
+// Set specifies a column assignment for Create or Update operations.
+// First argument is the field reference (e.g., user.Name), second is the value.
+// Example: def.Set(user.Name, name) generates "name = ${name}"
+func Set(any, any) any { return nil }

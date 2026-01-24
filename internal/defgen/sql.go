@@ -221,3 +221,202 @@ func formatFilterTree(filter *AnalyzedFilter) string {
 		return ""
 	}
 }
+
+// GenerateMutationSQL generates a SQL statement for a mutation method (INSERT/UPDATE/DELETE).
+func GenerateMutationSQL(pkg *Package, method *MutationMethod) (string, error) {
+	switch method.Kind {
+	case MethodKindCreate:
+		return generateInsertSQL(pkg, method)
+	case MethodKindUpdate:
+		return generateUpdateSQL(pkg, method)
+	case MethodKindDelete:
+		return generateDeleteSQL(pkg, method)
+	default:
+		return "", fmt.Errorf("unknown mutation kind: %v", method.Kind)
+	}
+}
+
+// generateInsertSQL generates an INSERT SQL statement.
+func generateInsertSQL(pkg *Package, method *MutationMethod) (string, error) {
+	// Determine the table name
+	tableName := ""
+	if method.TargetType != "" {
+		binding, ok := pkg.Tables[method.TargetType]
+		if ok {
+			tableName = binding.TableName
+		}
+	}
+
+	if tableName == "" {
+		return "", fmt.Errorf("could not determine table for method %s", method.Name)
+	}
+
+	// Entity mode: INSERT INTO table #bind(param)
+	if method.EntityParam != nil {
+		return fmt.Sprintf("INSERT INTO %s #bind(%s)", tableName, method.EntityParam.Name), nil
+	}
+
+	// Field mode: INSERT INTO table (col1, col2) VALUES (${val1}, ${val2})
+	if len(method.Sets) == 0 {
+		return "", fmt.Errorf("no columns specified for INSERT in method %s", method.Name)
+	}
+
+	var columns []string
+	var values []string
+
+	for _, set := range method.Sets {
+		colName := resolveSetColumnName(pkg, set)
+		if colName == "" {
+			continue
+		}
+		columns = append(columns, colName)
+		values = append(values, formatSetValue(set.Value))
+	}
+
+	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+		tableName,
+		strings.Join(columns, ", "),
+		strings.Join(values, ", ")), nil
+}
+
+// generateUpdateSQL generates an UPDATE SQL statement.
+func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
+	// Determine the table name
+	tableName := ""
+	if method.TargetType != "" {
+		binding, ok := pkg.Tables[method.TargetType]
+		if ok {
+			tableName = binding.TableName
+		}
+	}
+
+	if tableName == "" {
+		return "", fmt.Errorf("could not determine table for method %s", method.Name)
+	}
+
+	// Build SET clause
+	var setClause []string
+	for _, set := range method.Sets {
+		colName := resolveSetColumnName(pkg, set)
+		if colName == "" {
+			continue
+		}
+		setClause = append(setClause, fmt.Sprintf("%s = %s", colName, formatSetValue(set.Value)))
+	}
+
+	if len(setClause) == 0 {
+		return "", fmt.Errorf("no columns specified for UPDATE in method %s", method.Name)
+	}
+
+	sql := fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", "))
+
+	// Build WHERE clause
+	if len(method.Filters) > 0 {
+		var conditions []string
+		for _, filter := range method.Filters {
+			analyzed, err := AnalyzeFilter(pkg, filter)
+			if err != nil {
+				return "", err
+			}
+			if analyzed == nil {
+				continue
+			}
+
+			cond := formatFilterTree(analyzed)
+			if cond != "" {
+				conditions = append(conditions, cond)
+			}
+		}
+
+		if len(conditions) > 0 {
+			sql += " WHERE " + strings.Join(conditions, " AND ")
+		}
+	}
+
+	return sql, nil
+}
+
+// generateDeleteSQL generates a DELETE SQL statement.
+func generateDeleteSQL(pkg *Package, method *MutationMethod) (string, error) {
+	// Determine the table name
+	tableName := ""
+	if method.TargetType != "" {
+		binding, ok := pkg.Tables[method.TargetType]
+		if ok {
+			tableName = binding.TableName
+		}
+	}
+
+	if tableName == "" {
+		return "", fmt.Errorf("could not determine table for method %s", method.Name)
+	}
+
+	sql := fmt.Sprintf("DELETE FROM %s", tableName)
+
+	// Build WHERE clause
+	if len(method.Filters) > 0 {
+		var conditions []string
+		for _, filter := range method.Filters {
+			analyzed, err := AnalyzeFilter(pkg, filter)
+			if err != nil {
+				return "", err
+			}
+			if analyzed == nil {
+				continue
+			}
+
+			cond := formatFilterTree(analyzed)
+			if cond != "" {
+				conditions = append(conditions, cond)
+			}
+		}
+
+		if len(conditions) > 0 {
+			sql += " WHERE " + strings.Join(conditions, " AND ")
+		}
+	}
+
+	return sql, nil
+}
+
+// resolveSetColumnName resolves a SetExpr's field path to a column name.
+func resolveSetColumnName(pkg *Package, set SetExpr) string {
+	if len(set.FieldPath) < 2 {
+		return ""
+	}
+
+	// Get the type of the first element
+	firstElem := set.FieldPath[0]
+	typeName := getTypeName(firstElem.Type)
+
+	binding, ok := pkg.Tables[typeName]
+	if !ok {
+		return ""
+	}
+
+	// Find the field in the last element
+	lastElem := set.FieldPath[len(set.FieldPath)-1]
+	for _, field := range binding.Fields {
+		if field.GoName == lastElem.FieldName {
+			return field.DBName
+		}
+	}
+
+	return ""
+}
+
+// formatSetValue formats a SetValue for SQL.
+func formatSetValue(value SetValue) string {
+	if value.IsParam {
+		return fmt.Sprintf("${%s}", value.ParamName)
+	}
+	if value.IsLiteral {
+		if value.LiteralKind == token.STRING {
+			// Remove Go quotes and add SQL quotes
+			inner := value.LiteralValue[1 : len(value.LiteralValue)-1]
+			return "'" + inner + "'"
+		}
+		return value.LiteralValue
+	}
+	return ""
+}

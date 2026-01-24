@@ -47,7 +47,7 @@ func Generate(wd, pattern string, opts *GenerateOptions) error {
 		}
 
 		// If no methods found, nothing to generate for this package.
-		if len(pkg.Methods) == 0 {
+		if len(pkg.Methods) == 0 && len(pkg.MutationMethods) == 0 {
 			continue
 		}
 
@@ -150,7 +150,7 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 	// Generate interface
 	buf.WriteString(fmt.Sprintf("type %s interface {\n", interfaceInfo.Name))
 
-	// Generate public methods with SQL comments
+	// Generate public query methods with SQL comments
 	for _, method := range pkg.Methods {
 		sql, err := GenerateSQL(pkg, method)
 		if err != nil {
@@ -163,6 +163,22 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 
 		// Write method signature
 		sig := generateMethodSignature(pkg, method)
+		buf.WriteString(fmt.Sprintf("\t%s\n\n", sig))
+	}
+
+	// Generate mutation methods (Create/Update/Delete) with SQL comments
+	for _, method := range pkg.MutationMethods {
+		sql, err := GenerateMutationSQL(pkg, method)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate SQL for method %s: %w", method.Name, err)
+		}
+
+		// Write method comment with SQL
+		buf.WriteString(fmt.Sprintf("\t// %s exec constbind\n", method.Name))
+		buf.WriteString(fmt.Sprintf("\t// %s\n", sql))
+
+		// Write method signature
+		sig := generateMutationMethodSignature(pkg, method)
 		buf.WriteString(fmt.Sprintf("\t%s\n\n", sig))
 	}
 
@@ -221,6 +237,11 @@ func collectImports(pkg *Package) []string {
 	// Always include context if methods use it (based on interface definition)
 	imports["context"] = true
 
+	// Add database/sql if we have mutation methods
+	if len(pkg.MutationMethods) > 0 {
+		imports["database/sql"] = true
+	}
+
 	// Add fmt and reflect if we have callback methods (for cache utilities)
 	if len(pkg.CallbackMethods) > 0 {
 		imports["fmt"] = true
@@ -239,6 +260,9 @@ func findMatchingInterface(pkg *Package) *InterfaceInfo {
 	// Create a set of method names
 	methodNames := make(map[string]bool)
 	for _, m := range pkg.Methods {
+		methodNames[m.Name] = true
+	}
+	for _, m := range pkg.MutationMethods {
 		methodNames[m.Name] = true
 	}
 
@@ -290,6 +314,27 @@ func generateMethodSignature(pkg *Package, method *QueryMethod) string {
 	} else {
 		sb.WriteString("error")
 	}
+
+	return sb.String()
+}
+
+// generateMutationMethodSignature generates a method signature for mutation methods.
+func generateMutationMethodSignature(pkg *Package, method *MutationMethod) string {
+	var sb strings.Builder
+
+	sb.WriteString(method.Name)
+	sb.WriteString("(")
+
+	// Parameters - need to include ctx context.Context at the start
+	params := []string{"ctx context.Context"}
+	for _, p := range method.Params {
+		params = append(params, fmt.Sprintf("%s %s", p.Name, formatType(pkg, p.Type)))
+	}
+	sb.WriteString(strings.Join(params, ", "))
+	sb.WriteString(")")
+
+	// Return type is always (sql.Result, error)
+	sb.WriteString(" (sql.Result, error)")
 
 	return sb.String()
 }

@@ -1,8 +1,10 @@
 # def - SQL Query Code Generator
 
-A code generation tool similar to Google Wire that scans Go code with `def.Query` + `def.Filter` + `def.Column` definitions and generates interface definitions with SQL comments.
+A code generation tool similar to Google Wire that scans Go code with `def.Query`, `def.Create`, `def.Update`, `def.Delete` definitions and generates interface definitions with SQL comments.
 
-Supports column selection, aggregate functions (COUNT, SUM, AVG, MAX, MIN), and custom SQL functions via `def.Func`.
+Supports:
+- **Query**: Column selection, aggregate functions (COUNT, SUM, AVG, MAX, MIN), custom SQL functions via `def.Func`
+- **Mutations**: INSERT, UPDATE, DELETE operations via `def.Create`, `def.Update`, `def.Delete`
 
 ## Installation
 
@@ -281,6 +283,100 @@ func (q *querier) GetUsersWithLongName(ctx context.Context, minLen int) ([]*User
 - Number literals → used directly
 - Method parameters → converted to `${param}`
 
+### Mutation Operations
+
+#### Create (INSERT)
+
+Use `def.Create` to generate INSERT statements:
+
+**Entity Mode** - Insert entire struct:
+
+```go
+func (q *querier) CreateUser(ctx context.Context, user *User) (sql.Result, error) {
+    return def.Create(user)
+}
+// Generates: INSERT INTO users #bind(user)
+```
+
+**Field Mode** - Insert specific columns:
+
+```go
+func (q *querier) CreateUser(ctx context.Context, name string, age int) (sql.Result, error) {
+    var user User
+    return def.Create(
+        def.Set(user.Name, name),
+        def.Set(user.Age, age),
+    )
+}
+// Generates: INSERT INTO users (name, age) VALUES (${name}, ${age})
+```
+
+#### Update
+
+Use `def.Update` with `def.Set` and optional `def.Filter`:
+
+```go
+func (q *querier) UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error) {
+    var user User
+    return def.Update(
+        def.Set(user.Name, name),
+        def.Filter(user.ID == id),
+    )
+}
+// Generates: UPDATE users SET name = ${name} WHERE id = ${id}
+```
+
+Multiple SET clauses:
+
+```go
+func (q *querier) UpdateUser(ctx context.Context, id int64, name string, age int) (sql.Result, error) {
+    var user User
+    return def.Update(
+        def.Set(user.Name, name),
+        def.Set(user.Age, age),
+        def.Filter(user.ID == id),
+    )
+}
+// Generates: UPDATE users SET name = ${name}, age = ${age} WHERE id = ${id}
+```
+
+#### Delete
+
+Use `def.Delete` with optional `def.Filter`:
+
+```go
+func (q *querier) DeleteUser(ctx context.Context, id int64) (sql.Result, error) {
+    var user User
+    return def.Delete(
+        def.Filter(user.ID == id),
+    )
+}
+// Generates: DELETE FROM users WHERE id = ${id}
+```
+
+Delete with multiple conditions:
+
+```go
+func (q *querier) DeleteInactiveUsers(ctx context.Context, status string, maxAge int) (sql.Result, error) {
+    var user User
+    return def.Delete(
+        def.Filter(user.Status == status),
+        def.Filter(user.Age > maxAge),
+    )
+}
+// Generates: DELETE FROM users WHERE status = ${status} AND age > ${maxAge}
+```
+
+**Warning**: Delete without filter deletes all rows:
+
+```go
+func (q *querier) DeleteAllUsers(ctx context.Context) (sql.Result, error) {
+    var user User
+    return def.Delete()
+}
+// Generates: DELETE FROM users
+```
+
 ## Output Format Specification
 
 ### Generated Interface
@@ -292,6 +388,7 @@ package demo
 
 import (
     "context"
+    "database/sql"
 )
 
 type Querier interface {
@@ -302,16 +399,34 @@ type Querier interface {
     // GetProjectByUsername query constbind
     // SELECT * FROM projects WHERE user_id IN (SELECT id FROM users WHERE name = ${username}) AND status = 'active'
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
+
+    // CreateUser exec constbind
+    // INSERT INTO users #bind(user)
+    CreateUser(ctx context.Context, user *User) (sql.Result, error)
+
+    // UpdateUserName exec constbind
+    // UPDATE users SET name = ${name} WHERE id = ${id}
+    UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
+
+    // DeleteUser exec constbind
+    // DELETE FROM users WHERE id = ${id}
+    DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 ```
 
 ### SQL Comment Format
 
 Each method comment contains:
-1. Method name followed by `query constbind`
-2. SQL statement: `SELECT <columns> FROM <table> WHERE <conditions>`
+1. Method name followed by `query constbind` (for SELECT) or `exec constbind` (for INSERT/UPDATE/DELETE)
+2. SQL statement
 
-Where `<columns>` is `*` by default, or specific columns/functions if `def.Column` is used.
+**Query methods**: `SELECT <columns> FROM <table> WHERE <conditions>`
+- `<columns>` is `*` by default, or specific columns/functions if `def.Column` is used
+
+**Mutation methods**:
+- INSERT: `INSERT INTO <table> #bind(<param>)` or `INSERT INTO <table> (<cols>) VALUES (<vals>)`
+- UPDATE: `UPDATE <table> SET <assignments> WHERE <conditions>`
+- DELETE: `DELETE FROM <table> WHERE <conditions>`
 
 ### Parameter Binding Format
 
@@ -416,6 +531,8 @@ package demo
 
 import (
     "context"
+    "database/sql"
+
     "github.com/x5iu/def"
 )
 
@@ -437,6 +554,9 @@ type Project struct {
 type Querier interface {
     GetUserByID(ctx context.Context, id int64) (*User, error)
     GetProjectsByUsername(ctx context.Context, username string) ([]*Project, error)
+    CreateUser(ctx context.Context, user *User) (sql.Result, error)
+    UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
+    DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 
 func init() {
@@ -462,6 +582,25 @@ func (q *querier) GetProjectByUsername(ctx context.Context, username string) ([]
     )
     return nil, nil
 }
+
+func (q *querier) CreateUser(ctx context.Context, user *User) (sql.Result, error) {
+    return def.Create(user)
+}
+
+func (q *querier) UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error) {
+    var user User
+    return def.Update(
+        def.Set(user.Name, name),
+        def.Filter(user.ID == id),
+    )
+}
+
+func (q *querier) DeleteUser(ctx context.Context, id int64) (sql.Result, error) {
+    var user User
+    return def.Delete(
+        def.Filter(user.ID == id),
+    )
+}
 ```
 
 ### Output (def_gen.go)
@@ -471,6 +610,7 @@ package demo
 
 import (
     "context"
+    "database/sql"
 )
 
 type Querier interface {
@@ -481,6 +621,18 @@ type Querier interface {
     // GetProjectByUsername query constbind
     // SELECT * FROM projects WHERE user_id IN (SELECT id FROM users WHERE name = ${username}) AND status = 'active'
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
+
+    // CreateUser exec constbind
+    // INSERT INTO users #bind(user)
+    CreateUser(ctx context.Context, user *User) (sql.Result, error)
+
+    // UpdateUserName exec constbind
+    // UPDATE users SET name = ${name} WHERE id = ${id}
+    UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
+
+    // DeleteUser exec constbind
+    // DELETE FROM users WHERE id = ${id}
+    DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 ```
 

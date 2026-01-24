@@ -2,12 +2,13 @@
 
 ## Project Overview
 
-`def` is a code generation tool similar to Google Wire. It scans Go code containing `def.Query` + `def.Filter` definitions and generates interface implementations with SQL comments.
+`def` is a code generation tool similar to Google Wire. It scans Go code containing `def.Query`, `def.Create`, `def.Update`, `def.Delete` definitions and generates interface implementations with SQL comments.
 
 ### Key Features
 - Parses struct definitions with `db`, `foreign_key`, and `primary_key` tags
 - Reads table bindings from `def.Init` + `def.BindTable[T]("table")` calls
-- Analyzes `def.Query` + `def.Filter` expressions to generate SQL WHERE clauses
+- Analyzes `def.Query` + `def.Filter` expressions to generate SQL SELECT statements
+- Analyzes `def.Create`, `def.Update`, `def.Delete` + `def.Set`/`def.Filter` for mutation SQL
 - Supports foreign key traversal for generating subqueries
 - Generates Callback methods for automatic relation loading
 
@@ -52,7 +53,7 @@ Returns a `*Package` struct containing:
 **File**: `internal/defgen/parse.go`, `internal/defgen/schema.go`
 **Function**: `Parse(pkg *Package) error`
 
-Scanning happens in 4 steps:
+Scanning happens in 5 steps:
 
 #### Step 1: `parseAllStructs()`
 - Scans all struct type declarations
@@ -78,6 +79,12 @@ Scanning happens in 4 steps:
 - Extracts `def.Column(...)` and `def.Filter(...)` from arguments
 - Stores in `pkg.Methods`
 
+#### Step 5: `parseMutationMethods()`
+- Finds methods containing `def.Create(...)`, `def.Update(...)`, `def.Delete(...)` calls
+- Parses method receiver, parameters
+- Extracts `def.Set(...)` and `def.Filter(...)` from arguments
+- Stores in `pkg.MutationMethods`
+
 ### 4. Expression Parsing
 
 **File**: `internal/defgen/parse.go`
@@ -101,6 +108,12 @@ Parses selector expressions like `project.User.Name`:
 - Builds path: `[project, User, Name]`
 - Detects foreign key traversals
 - Marks `IsForeignKey` on path elements
+
+#### Set Expression: `parseSetExpr()`
+Parses `def.Set(field, value)` calls for INSERT/UPDATE:
+- First argument is a field selector (e.g., `user.Name`)
+- Second argument is a parameter or literal value
+- Returns `SetExpr` with field path and value
 
 ### 5. Filter Analysis
 
@@ -142,6 +155,13 @@ Recursively formats filter tree:
 - `AnalyzedFilterOr` → `(cond1 OR cond2)`
 - `AnalyzedFilterIn` → `column IN (${param})`
 - `AnalyzedFilterComparison` → `column = ${param}` or subquery
+
+**Function**: `GenerateMutationSQL(pkg *Package, method *MutationMethod) (string, error)`
+
+Generates mutation SQL statements:
+- `MethodKindCreate` → `INSERT INTO table (col1, col2) VALUES (${val1}, ${val2})` or `INSERT INTO table #bind(param)`
+- `MethodKindUpdate` → `UPDATE table SET col1 = ${val1} WHERE condition`
+- `MethodKindDelete` → `DELETE FROM table WHERE condition`
 
 ### 7. Relation Analysis
 
@@ -186,8 +206,11 @@ Output is formatted with `go/format`.
 | `Package` | Parsed package with tables, methods, interfaces |
 | `TableBinding` | Type-to-table mapping with fields and foreign keys |
 | `QueryMethod` | Method definition with columns and filters |
+| `MutationMethod` | Method definition for INSERT/UPDATE/DELETE |
 | `FilterExpr` | Filter expression tree node |
 | `ColumnExpr` | SELECT column expression |
+| `SetExpr` | SET clause assignment expression |
+| `SetValue` | Value in a SET assignment |
 | `FieldPathElement` | Element in field access path (e.g., `project.User.Name`) |
 | `RelationMethod` | Generated relation query method |
 | `CallbackMethod` | Generated Callback implementation |
@@ -241,6 +264,42 @@ def.Column(def.Count(user.ID))                  // Aggregate
 def.Column(def.Func[string]("COALESCE", user.Name, "default"))  // Custom function
 ```
 
+### Create Expressions (INSERT)
+```go
+// Entity mode - inserts entire struct
+def.Create(user)                                // INSERT INTO users #bind(user)
+
+// Field mode - inserts specific columns
+def.Create(                                     // INSERT INTO users (name, age)
+    def.Set(user.Name, name),                   // VALUES (${name}, ${age})
+    def.Set(user.Age, age),
+)
+```
+
+### Update Expressions
+```go
+def.Update(                                     // UPDATE users
+    def.Set(user.Name, name),                   // SET name = ${name}
+    def.Filter(user.ID == id),                  // WHERE id = ${id}
+)
+
+def.Update(                                     // UPDATE users
+    def.Set(user.Name, name),                   // SET name = ${name}, age = ${age}
+    def.Set(user.Age, age),                     // WHERE id = ${id}
+    def.Filter(user.ID == id),
+)
+```
+
+### Delete Expressions
+```go
+def.Delete(def.Filter(user.ID == id))           // DELETE FROM users WHERE id = ${id}
+def.Delete(                                     // DELETE FROM users
+    def.Filter(user.Status == "inactive"),      // WHERE status = 'inactive' AND age > ${minAge}
+    def.Filter(user.Age > minAge),
+)
+def.Delete()                                    // DELETE FROM users (deletes all - use with caution!)
+```
+
 ## Generated Output Example
 
 ```go
@@ -254,5 +313,17 @@ type UserRepository interface {
     // FindByStatus query constbind
     // SELECT * FROM users WHERE status = 'active' AND age > ${minAge}
     FindByStatus(ctx context.Context, minAge int) ([]*User, error)
+
+    // CreateUser exec constbind
+    // INSERT INTO users #bind(user)
+    CreateUser(ctx context.Context, user *User) (sql.Result, error)
+
+    // UpdateUserName exec constbind
+    // UPDATE users SET name = ${name} WHERE id = ${id}
+    UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
+
+    // DeleteUser exec constbind
+    // DELETE FROM users WHERE id = ${id}
+    DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 ```

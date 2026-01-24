@@ -91,6 +91,16 @@ const (
 	FilterOr                           // Internal: expr || expr
 )
 
+// MethodKind represents the type of operation (query or mutation).
+type MethodKind int
+
+const (
+	MethodKindQuery  MethodKind = iota // SELECT
+	MethodKindCreate                   // INSERT
+	MethodKindUpdate                   // UPDATE
+	MethodKindDelete                   // DELETE
+)
+
 // FilterExpr represents a filter expression tree node.
 type FilterExpr struct {
 	Kind FilterKind
@@ -124,6 +134,34 @@ type ColumnExpr struct {
 	FieldPath []FieldPathElement // Field path if not a function (IsFunc=false)
 }
 
+// SetExpr represents a SET clause assignment in INSERT/UPDATE operations.
+type SetExpr struct {
+	FieldPath []FieldPathElement // Field path (e.g., user.Name -> [user, Name])
+	Value     SetValue           // The value to assign
+}
+
+// SetValue represents the value in a SET assignment.
+type SetValue struct {
+	IsParam      bool        // true if this is a method parameter reference
+	IsLiteral    bool        // true if this is a literal value
+	ParamName    string      // parameter name if IsParam
+	LiteralValue string      // literal value if IsLiteral
+	LiteralKind  token.Token // STRING, INT, FLOAT for literals
+}
+
+// MutationMethod represents a mutation method (INSERT/UPDATE/DELETE).
+type MutationMethod struct {
+	Kind        MethodKind    // Create, Update, or Delete
+	Name        string        // Method name
+	Receiver    string        // Receiver type name
+	Params      []ParamInfo   // Method parameters
+	TargetType  string        // Target struct type name (e.g., "User")
+	Sets        []SetExpr     // SET expressions for Create/Update
+	Filters     []*FilterExpr // WHERE conditions for Update/Delete
+	EntityParam *ParamInfo    // Entity parameter for Create entity mode
+	Pos         token.Pos     // Position in source
+}
+
 // Package represents a parsed package with all def-related information.
 type Package struct {
 	Fset    *token.FileSet
@@ -131,12 +169,13 @@ type Package struct {
 	PkgName string
 	Dir     string
 
-	Tables     map[string]*TableBinding // TypeName -> TableBinding
-	Methods    []*QueryMethod
-	Interfaces map[string]*InterfaceInfo // Interface name -> InterfaceInfo
-	TypesInfo  *types.Info
-	Syntax     []*ast.File
-	TypesPkg   *types.Package
+	Tables          map[string]*TableBinding // TypeName -> TableBinding
+	Methods         []*QueryMethod
+	MutationMethods []*MutationMethod         // INSERT/UPDATE/DELETE methods
+	Interfaces      map[string]*InterfaceInfo // Interface name -> InterfaceInfo
+	TypesInfo       *types.Info
+	Syntax          []*ast.File
+	TypesPkg        *types.Package
 
 	// Relation-related generated content
 	RelationMethods  []*RelationMethod

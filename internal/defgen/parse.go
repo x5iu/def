@@ -96,6 +96,11 @@ func Parse(pkg *Package) error {
 		return fmt.Errorf("failed to parse query methods: %w", err)
 	}
 
+	// Step 5: Parse mutation methods (Create/Update/Delete)
+	if err := parseMutationMethods(pkg, structs); err != nil {
+		return fmt.Errorf("failed to parse mutation methods: %w", err)
+	}
+
 	return nil
 }
 
@@ -850,4 +855,330 @@ done:
 	}
 
 	return path, nil
+}
+
+// parseMutationMethods finds and parses methods containing def.Create/Update/Delete calls.
+func parseMutationMethods(pkg *Package, structs map[string]*structInfo) error {
+	for _, file := range pkg.Syntax {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+
+			// Must be a method (have a receiver)
+			if fn.Recv == nil || len(fn.Recv.List) == 0 {
+				continue
+			}
+
+			// Find mutation call in the method body
+			kind, mutationCall := findMutationCall(pkg, fn)
+			if mutationCall == nil {
+				continue
+			}
+
+			// Parse the method
+			method, err := parseMutationMethod(pkg, fn, kind, mutationCall, structs)
+			if err != nil {
+				return fmt.Errorf("failed to parse method %s: %w", fn.Name.Name, err)
+			}
+
+			pkg.MutationMethods = append(pkg.MutationMethods, method)
+		}
+	}
+
+	return nil
+}
+
+// findMutationCall finds a def.Create/Update/Delete call in a function body.
+// Returns the kind of mutation and the call expression.
+func findMutationCall(pkg *Package, fn *ast.FuncDecl) (MethodKind, *ast.CallExpr) {
+	var kind MethodKind
+	var mutationCall *ast.CallExpr
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		if isDefCall(pkg, call, "Create") {
+			kind = MethodKindCreate
+			mutationCall = call
+			return false
+		}
+		if isDefCall(pkg, call, "Update") {
+			kind = MethodKindUpdate
+			mutationCall = call
+			return false
+		}
+		if isDefCall(pkg, call, "Delete") {
+			kind = MethodKindDelete
+			mutationCall = call
+			return false
+		}
+
+		return true
+	})
+
+	return kind, mutationCall
+}
+
+// parseMutationMethod parses a method with a def.Create/Update/Delete call.
+func parseMutationMethod(pkg *Package, fn *ast.FuncDecl, kind MethodKind, mutationCall *ast.CallExpr, structs map[string]*structInfo) (*MutationMethod, error) {
+	method := &MutationMethod{
+		Kind: kind,
+		Name: fn.Name.Name,
+		Pos:  fn.Pos(),
+	}
+
+	// Get receiver type name
+	if len(fn.Recv.List) > 0 {
+		recvType := fn.Recv.List[0].Type
+		method.Receiver = getReceiverTypeName(recvType)
+	}
+
+	// Parse parameters (skip context.Context)
+	if fn.Type.Params != nil {
+		for _, param := range fn.Type.Params.List {
+			paramType := pkg.TypesInfo.TypeOf(param.Type)
+			// Skip context.Context
+			if isContextType(paramType) {
+				continue
+			}
+			for _, name := range param.Names {
+				method.Params = append(method.Params, ParamInfo{
+					Name: name.Name,
+					Type: paramType,
+				})
+			}
+		}
+	}
+
+	// Parse mutation-specific arguments
+	switch kind {
+	case MethodKindCreate:
+		targetType, sets, entityParam, err := parseCreateArgs(pkg, mutationCall, structs, method.Params)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse Create args: %w", err)
+		}
+		method.TargetType = targetType
+		method.Sets = sets
+		method.EntityParam = entityParam
+
+	case MethodKindUpdate:
+		targetType, sets, filters, err := parseUpdateArgs(pkg, mutationCall, structs, method.Params)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse Update args: %w", err)
+		}
+		method.TargetType = targetType
+		method.Sets = sets
+		method.Filters = filters
+
+	case MethodKindDelete:
+		targetType, filters, err := parseDeleteArgs(pkg, mutationCall, structs, method.Params)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse Delete args: %w", err)
+		}
+		method.TargetType = targetType
+		method.Filters = filters
+	}
+
+	return method, nil
+}
+
+// parseCreateArgs parses arguments for def.Create().
+// Returns (targetType, sets, entityParam, error).
+func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, *ParamInfo, error) {
+	if len(call.Args) == 0 {
+		return "", nil, nil, fmt.Errorf("def.Create requires at least 1 argument")
+	}
+
+	// Check if first argument is a def.Set call (field mode) or an identifier (entity mode)
+	firstArg := call.Args[0]
+	if setCall, ok := firstArg.(*ast.CallExpr); ok && isDefCall(pkg, setCall, "Set") {
+		// Field mode: def.Create(def.Set(...), def.Set(...))
+		var sets []SetExpr
+		var targetType string
+
+		for _, arg := range call.Args {
+			argCall, ok := arg.(*ast.CallExpr)
+			if !ok || !isDefCall(pkg, argCall, "Set") {
+				continue
+			}
+
+			setExpr, err := parseSetExpr(pkg, argCall, structs, params)
+			if err != nil {
+				return "", nil, nil, err
+			}
+
+			// Determine target type from the first Set's field path
+			if targetType == "" && len(setExpr.FieldPath) > 0 {
+				targetType = getTypeName(setExpr.FieldPath[0].Type)
+			}
+
+			sets = append(sets, setExpr)
+		}
+
+		return targetType, sets, nil, nil
+	}
+
+	// Entity mode: def.Create(user)
+	ident, ok := firstArg.(*ast.Ident)
+	if !ok {
+		return "", nil, nil, fmt.Errorf("def.Create in entity mode requires an identifier")
+	}
+
+	// Find the parameter
+	for i := range params {
+		if params[i].Name == ident.Name {
+			targetType := getTypeName(params[i].Type)
+			return targetType, nil, &params[i], nil
+		}
+	}
+
+	return "", nil, nil, fmt.Errorf("unknown identifier in Create: %s", ident.Name)
+}
+
+// parseUpdateArgs parses arguments for def.Update().
+// Returns (targetType, sets, filters, error).
+func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, []*FilterExpr, error) {
+	var sets []SetExpr
+	var filters []*FilterExpr
+	var targetType string
+
+	for _, arg := range call.Args {
+		argCall, ok := arg.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+
+		if isDefCall(pkg, argCall, "Set") {
+			setExpr, err := parseSetExpr(pkg, argCall, structs, params)
+			if err != nil {
+				return "", nil, nil, err
+			}
+
+			// Determine target type from the first Set's field path
+			if targetType == "" && len(setExpr.FieldPath) > 0 {
+				targetType = getTypeName(setExpr.FieldPath[0].Type)
+			}
+
+			sets = append(sets, setExpr)
+			continue
+		}
+
+		if isDefCall(pkg, argCall, "Filter") {
+			if len(argCall.Args) != 1 {
+				return "", nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
+			}
+			filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
+			if err != nil {
+				return "", nil, nil, err
+			}
+			filters = append(filters, filter)
+		}
+	}
+
+	if len(sets) == 0 {
+		return "", nil, nil, fmt.Errorf("def.Update requires at least one Set expression")
+	}
+
+	return targetType, sets, filters, nil
+}
+
+// parseDeleteArgs parses arguments for def.Delete().
+// Returns (targetType, filters, error).
+func parseDeleteArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []*FilterExpr, error) {
+	var filters []*FilterExpr
+	var targetType string
+
+	for _, arg := range call.Args {
+		argCall, ok := arg.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+
+		if isDefCall(pkg, argCall, "Filter") {
+			if len(argCall.Args) != 1 {
+				return "", nil, fmt.Errorf("def.Filter requires exactly 1 argument")
+			}
+			filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
+			if err != nil {
+				return "", nil, err
+			}
+
+			// Determine target type from filter's field path
+			if targetType == "" && filter.Kind == FilterComparison && filter.Left.IsField && len(filter.Left.FieldPath) > 0 {
+				targetType = getTypeName(filter.Left.FieldPath[0].Type)
+			}
+
+			filters = append(filters, filter)
+		}
+	}
+
+	// If no filters, we need to determine target type from the method's receiver context
+	// This will be handled in SQL generation by looking at the interface or receiver type
+
+	return targetType, filters, nil
+}
+
+// parseSetExpr parses a def.Set(field, value) call.
+func parseSetExpr(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (SetExpr, error) {
+	var setExpr SetExpr
+
+	if len(call.Args) != 2 {
+		return setExpr, fmt.Errorf("def.Set requires exactly 2 arguments")
+	}
+
+	// Parse field (first argument)
+	fieldArg := call.Args[0]
+	sel, ok := fieldArg.(*ast.SelectorExpr)
+	if !ok {
+		return setExpr, fmt.Errorf("def.Set first argument must be a field selector")
+	}
+
+	fieldPath, err := parseFieldPath(pkg, sel, structs)
+	if err != nil {
+		return setExpr, fmt.Errorf("failed to parse Set field: %w", err)
+	}
+	setExpr.FieldPath = fieldPath
+
+	// Parse value (second argument)
+	valueArg := call.Args[1]
+	setValue, err := parseSetValue(pkg, valueArg, params)
+	if err != nil {
+		return setExpr, fmt.Errorf("failed to parse Set value: %w", err)
+	}
+	setExpr.Value = setValue
+
+	return setExpr, nil
+}
+
+// parseSetValue parses the value part of a def.Set call.
+func parseSetValue(pkg *Package, expr ast.Expr, params []ParamInfo) (SetValue, error) {
+	var value SetValue
+
+	switch e := expr.(type) {
+	case *ast.Ident:
+		// Parameter reference
+		for _, p := range params {
+			if p.Name == e.Name {
+				value.IsParam = true
+				value.ParamName = e.Name
+				return value, nil
+			}
+		}
+		return value, fmt.Errorf("unknown identifier: %s", e.Name)
+
+	case *ast.BasicLit:
+		// Literal value
+		value.IsLiteral = true
+		value.LiteralValue = e.Value
+		value.LiteralKind = e.Kind
+		return value, nil
+
+	default:
+		return value, fmt.Errorf("unsupported Set value type: %T", expr)
+	}
 }
