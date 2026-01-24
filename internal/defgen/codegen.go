@@ -144,8 +144,13 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 
 	// Generate go:generate directive for defc
 	defcOutput := strings.ToLower(interfaceInfo.Name) + "_impl.go"
-	buf.WriteString(fmt.Sprintf("//go:generate go run -mod=mod github.com/x5iu/defc generate -T %s -o %s\n\n",
-		interfaceInfo.Name, defcOutput))
+	if len(pkg.CallbackMethods) > 0 {
+		buf.WriteString(fmt.Sprintf("//go:generate go run -mod=mod github.com/x5iu/defc@latest generate --features sqlx/callback -T %s -o %s\n\n",
+			interfaceInfo.Name, defcOutput))
+	} else {
+		buf.WriteString(fmt.Sprintf("//go:generate go run -mod=mod github.com/x5iu/defc@latest generate -T %s -o %s\n\n",
+			interfaceInfo.Name, defcOutput))
+	}
 
 	// Generate interface
 	buf.WriteString(fmt.Sprintf("type %s interface {\n", interfaceInfo.Name))
