@@ -451,37 +451,37 @@ import (
 
 type Querier interface {
     // GetUserByID query constbind
-    // SELECT * FROM users WHERE id = ${id}
+    /* SELECT * FROM users WHERE id = ${id} */
     GetUserByID(ctx context.Context, id int64) (*User, error)
 
     // GetProjectByUsername query constbind
-    // SELECT *
-    // FROM projects
-    // WHERE user_id IN (SELECT id FROM users WHERE name = ${username})
-    //   AND status = 'active'
+    /* SELECT *
+    FROM projects
+    WHERE user_id IN (SELECT id FROM users WHERE name = ${username})
+      AND status = 'active' */
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
 
     // CreateUser exec constbind
-    // INSERT INTO users (
-    //     id,
-    //     name,
-    //     age
-    // ) VALUES (
-    //     ${user.ID},
-    //     ${user.Name},
-    //     ${user.Age}
-    // )
+    /* INSERT INTO users (
+        id,
+        name,
+        age
+    ) VALUES (
+        ${user.ID},
+        ${user.Name},
+        ${user.Age}
+    ) */
     CreateUser(ctx context.Context, user *User) (sql.Result, error)
 
     // UpdateUserName exec constbind
-    // UPDATE users
-    // SET name = ${name}
-    // WHERE id = ${id}
+    /* UPDATE users
+    SET name = ${name}
+    WHERE id = ${id} */
     UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
 
     // DeleteUser exec constbind
-    // DELETE FROM users
-    // WHERE id = ${id}
+    /* DELETE FROM users
+    WHERE id = ${id} */
     DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 ```
@@ -687,39 +687,39 @@ import (
 
 type Querier interface {
     // GetUserByID query constbind
-    // SELECT *
-    // FROM users
-    // WHERE id = ${id}
+    /* SELECT *
+    FROM users
+    WHERE id = ${id} */
     GetUserByID(ctx context.Context, id int64) (*User, error)
 
     // GetProjectByUsername query constbind
-    // SELECT *
-    // FROM projects
-    // WHERE user_id IN (SELECT id FROM users WHERE name = ${username})
-    //   AND status = 'active'
+    /* SELECT *
+    FROM projects
+    WHERE user_id IN (SELECT id FROM users WHERE name = ${username})
+      AND status = 'active' */
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
 
     // CreateUser exec constbind
-    // INSERT INTO users (
-    //     id,
-    //     name,
-    //     age
-    // ) VALUES (
-    //     ${user.ID},
-    //     ${user.Name},
-    //     ${user.Age}
-    // )
+    /* INSERT INTO users (
+        id,
+        name,
+        age
+    ) VALUES (
+        ${user.ID},
+        ${user.Name},
+        ${user.Age}
+    ) */
     CreateUser(ctx context.Context, user *User) (sql.Result, error)
 
     // UpdateUserName exec constbind
-    // UPDATE users
-    // SET name = ${name}
-    // WHERE id = ${id}
+    /* UPDATE users
+    SET name = ${name}
+    WHERE id = ${id} */
     UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
 
     // DeleteUser exec constbind
-    // DELETE FROM users
-    // WHERE id = ${id}
+    /* DELETE FROM users
+    WHERE id = ${id} */
     DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 ```

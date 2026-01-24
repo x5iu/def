@@ -162,11 +162,10 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 			return nil, fmt.Errorf("failed to generate SQL for method %s: %w", method.Name, err)
 		}
 
-		// Write method comment with SQL using /* */ format
+		// Write method comment with SQL - first line uses //, SQL uses /* */
 		formattedSQL := FormatSQL(sql)
-		buf.WriteString(fmt.Sprintf("\t/* %s query constbind\n", method.Name))
-		buf.WriteString(indentSQL(formattedSQL))
-		buf.WriteString("\n\t*/\n")
+		buf.WriteString(fmt.Sprintf("\t// %s query constbind\n", method.Name))
+		buf.WriteString(fmt.Sprintf("\t/* %s */\n", formattedSQL))
 
 		// Write method signature
 		sig := generateMethodSignature(pkg, method)
@@ -180,11 +179,10 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 			return nil, fmt.Errorf("failed to generate SQL for method %s: %w", method.Name, err)
 		}
 
-		// Write method comment with SQL using /* */ format
+		// Write method comment with SQL - first line uses //, SQL uses /* */
 		formattedSQL := FormatSQL(sql)
-		buf.WriteString(fmt.Sprintf("\t/* %s exec constbind\n", method.Name))
-		buf.WriteString(indentSQL(formattedSQL))
-		buf.WriteString("\n\t*/\n")
+		buf.WriteString(fmt.Sprintf("\t// %s exec constbind\n", method.Name))
+		buf.WriteString(fmt.Sprintf("\t/* %s */\n", formattedSQL))
 
 		// Write method signature
 		sig := generateMutationMethodSignature(pkg, method)
@@ -400,33 +398,23 @@ func getCache[T any](ctx context.Context, identifier string) (v T, ok bool) {
 `
 }
 
-// indentSQL adds a tab prefix to each line of the SQL for proper formatting in block comments.
-func indentSQL(sql string) string {
-	lines := strings.Split(sql, "\n")
-	for i, line := range lines {
-		lines[i] = "\t" + line
-	}
-	return strings.Join(lines, "\n")
-}
-
 // generateRelationMethodComment generates the SQL comment for a relation method.
 func generateRelationMethodComment(rm *RelationMethod) string {
 	var sb strings.Builder
 
-	// Build the first line with method name and options
-	sb.WriteString(fmt.Sprintf("\t/* %s query constbind", rm.MethodName))
+	// Build the first line with method name and options using //
+	sb.WriteString(fmt.Sprintf("\t// %s query constbind", rm.MethodName))
 	if rm.IsSlice {
 		// Add WRAP option for slice return types
 		sb.WriteString(fmt.Sprintf(" WRAP=(*%ss)", rm.RefTypeName))
 	}
 	sb.WriteString("\n")
 
-	// Build and format the SQL
+	// Build and format the SQL using /* */
 	sql := fmt.Sprintf("SELECT * FROM %s WHERE %s = ${%s}",
 		rm.RefTableName, rm.WhereColumn, rm.ParamName)
 	formattedSQL := FormatSQL(sql)
-	sb.WriteString(indentSQL(formattedSQL))
-	sb.WriteString("\n\t*/\n")
+	sb.WriteString(fmt.Sprintf("\t/* %s */\n", formattedSQL))
 
 	return sb.String()
 }

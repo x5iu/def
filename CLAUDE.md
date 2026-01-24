@@ -342,52 +342,52 @@ def.Delete(                                     // DELETE FROM users
 
 type UserRepository interface {
     // FindByID query constbind
-    // SELECT *
-    // FROM users
-    // WHERE id = ${id}
+    /* SELECT *
+    FROM users
+    WHERE id = ${id} */
     FindByID(ctx context.Context, id int64) (*User, error)
 
     // FindByStatus query constbind
-    // SELECT *
-    // FROM users
-    // WHERE status = 'active'
-    //   AND age > ${minAge}
+    /* SELECT *
+    FROM users
+    WHERE status = 'active'
+      AND age > ${minAge} */
     FindByStatus(ctx context.Context, minAge int) ([]*User, error)
 
     // FindByPage query constbind
-    // SELECT *
-    // FROM users
-    // WHERE status = ${status}
-    // LIMIT ${limit} OFFSET ${offset}
+    /* SELECT *
+    FROM users
+    WHERE status = ${status}
+    LIMIT ${limit} OFFSET ${offset} */
     FindByPage(ctx context.Context, status string, limit, offset int) ([]*User, error)
 
     // FindTop10 query constbind
-    // SELECT *
-    // FROM users
-    // LIMIT 10
+    /* SELECT *
+    FROM users
+    LIMIT 10 */
     FindTop10(ctx context.Context) ([]*User, error)
 
     // CreateUser exec constbind
-    // INSERT INTO users (
-    //     id,
-    //     name,
-    //     age
-    // ) VALUES (
-    //     ${user.ID},
-    //     ${user.Name},
-    //     ${user.Age}
-    // )
+    /* INSERT INTO users (
+        id,
+        name,
+        age
+    ) VALUES (
+        ${user.ID},
+        ${user.Name},
+        ${user.Age}
+    ) */
     CreateUser(ctx context.Context, user *User) (sql.Result, error)
 
     // UpdateUserName exec constbind
-    // UPDATE users
-    // SET name = ${name}
-    // WHERE id = ${id}
+    /* UPDATE users
+    SET name = ${name}
+    WHERE id = ${id} */
     UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
 
     // DeleteUser exec constbind
-    // DELETE FROM users
-    // WHERE id = ${id}
+    /* DELETE FROM users
+    WHERE id = ${id} */
     DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 ```
