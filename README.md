@@ -295,7 +295,7 @@ Use `def.Create` to generate INSERT statements:
 func (q *querier) CreateUser(ctx context.Context, user *User) (sql.Result, error) {
     return def.Create(user)
 }
-// Generates: INSERT INTO users #bind(user)
+// Generates: INSERT INTO users (id, name, age) VALUES (${user.ID}, ${user.Name}, ${user.Age})
 ```
 
 **Field Mode** - Insert specific columns:
@@ -314,6 +314,17 @@ func (q *querier) CreateUser(ctx context.Context, name string, age int) (sql.Res
 #### Update
 
 Use `def.Update` with `def.Set` and optional `def.Filter`:
+
+**Entity Mode** - Update entire struct (primary key excluded from SET):
+
+```go
+func (q *querier) UpdateUser(ctx context.Context, user *User) (sql.Result, error) {
+    return def.Update(user, def.Filter(user.ID == user.ID))
+}
+// Generates: UPDATE users SET name = ${user.Name}, age = ${user.Age} WHERE id = ${user.ID}
+```
+
+**Field Mode** - Update specific columns:
 
 ```go
 func (q *querier) UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error) {
@@ -389,19 +400,26 @@ type Querier interface {
     GetUserByID(ctx context.Context, id int64) (*User, error)
 
     // GetProjectByUsername query constbind
-    // SELECT * FROM projects WHERE user_id IN (SELECT id FROM users WHERE name = ${username}) AND status = 'active'
+    // SELECT *
+    // FROM projects
+    // WHERE user_id IN (SELECT id FROM users WHERE name = ${username})
+    //   AND status = 'active'
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
 
     // CreateUser exec constbind
-    // INSERT INTO users #bind(user)
+    // INSERT INTO users (id, name, age)
+    // VALUES (${user.ID}, ${user.Name}, ${user.Age})
     CreateUser(ctx context.Context, user *User) (sql.Result, error)
 
     // UpdateUserName exec constbind
-    // UPDATE users SET name = ${name} WHERE id = ${id}
+    // UPDATE users
+    // SET name = ${name}
+    // WHERE id = ${id}
     UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
 
     // DeleteUser exec constbind
-    // DELETE FROM users WHERE id = ${id}
+    // DELETE FROM users
+    // WHERE id = ${id}
     DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 ```
@@ -416,7 +434,7 @@ Each method comment contains:
 - `<columns>` is `*` by default, or specific columns/functions if `def.Column` is used
 
 **Mutation methods**:
-- INSERT: `INSERT INTO <table> #bind(<param>)` or `INSERT INTO <table> (<cols>) VALUES (<vals>)`
+- INSERT: `INSERT INTO <table> (<cols>) VALUES (<vals>)`
 - UPDATE: `UPDATE <table> SET <assignments> WHERE <conditions>`
 - DELETE: `DELETE FROM <table> WHERE <conditions>`
 
@@ -607,23 +625,32 @@ import (
 
 type Querier interface {
     // GetUserByID query constbind
-    // SELECT * FROM users WHERE id = ${id}
+    // SELECT *
+    // FROM users
+    // WHERE id = ${id}
     GetUserByID(ctx context.Context, id int64) (*User, error)
 
     // GetProjectByUsername query constbind
-    // SELECT * FROM projects WHERE user_id IN (SELECT id FROM users WHERE name = ${username}) AND status = 'active'
+    // SELECT *
+    // FROM projects
+    // WHERE user_id IN (SELECT id FROM users WHERE name = ${username})
+    //   AND status = 'active'
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
 
     // CreateUser exec constbind
-    // INSERT INTO users #bind(user)
+    // INSERT INTO users (id, name, age)
+    // VALUES (${user.ID}, ${user.Name}, ${user.Age})
     CreateUser(ctx context.Context, user *User) (sql.Result, error)
 
     // UpdateUserName exec constbind
-    // UPDATE users SET name = ${name} WHERE id = ${id}
+    // UPDATE users
+    // SET name = ${name}
+    // WHERE id = ${id}
     UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
 
     // DeleteUser exec constbind
-    // DELETE FROM users WHERE id = ${id}
+    // DELETE FROM users
+    // WHERE id = ${id}
     DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 ```

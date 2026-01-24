@@ -251,9 +251,24 @@ func generateInsertSQL(pkg *Package, method *MutationMethod) (string, error) {
 		return "", fmt.Errorf("could not determine table for method %s", method.Name)
 	}
 
-	// Entity mode: INSERT INTO table #bind(param)
+	// Entity mode: INSERT INTO table (col1, col2) VALUES (${param.Field1}, ${param.Field2})
 	if method.EntityParam != nil {
-		return fmt.Sprintf("INSERT INTO %s #bind(%s)", tableName, method.EntityParam.Name), nil
+		binding, ok := pkg.Tables[method.TargetType]
+		if !ok {
+			return "", fmt.Errorf("could not find table binding for type %s", method.TargetType)
+		}
+
+		var columns []string
+		var values []string
+		for _, field := range binding.Fields {
+			columns = append(columns, field.DBName)
+			values = append(values, fmt.Sprintf("${%s.%s}", method.EntityParam.Name, field.GoName))
+		}
+
+		return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			tableName,
+			strings.Join(columns, ", "),
+			strings.Join(values, ", ")), nil
 	}
 
 	// Field mode: INSERT INTO table (col1, col2) VALUES (${val1}, ${val2})
@@ -294,9 +309,28 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 		return "", fmt.Errorf("could not determine table for method %s", method.Name)
 	}
 
-	// Entity mode: UPDATE table #bind(param) WHERE ...
+	// Entity mode: UPDATE table SET col1 = ${param.Field1}, col2 = ${param.Field2} WHERE ...
 	if method.EntityParam != nil {
-		sql := fmt.Sprintf("UPDATE %s #bind(%s)", tableName, method.EntityParam.Name)
+		binding, ok := pkg.Tables[method.TargetType]
+		if !ok {
+			return "", fmt.Errorf("could not find table binding for type %s", method.TargetType)
+		}
+
+		// Build SET clause from all fields (skip primary key)
+		var setClause []string
+		for _, field := range binding.Fields {
+			if field.IsPrimaryKey {
+				continue
+			}
+			setClause = append(setClause, fmt.Sprintf("%s = ${%s.%s}",
+				field.DBName, method.EntityParam.Name, field.GoName))
+		}
+
+		if len(setClause) == 0 {
+			return "", fmt.Errorf("no columns to update for method %s", method.Name)
+		}
+
+		sql := fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", "))
 
 		// Build WHERE clause
 		if len(method.Filters) > 0 {
@@ -522,16 +556,6 @@ func formatSelectSQL(sql string) string {
 func formatInsertSQL(sql string) string {
 	var result strings.Builder
 
-	// Check for #bind syntax
-	bindPos := strings.Index(sql, " #bind(")
-	if bindPos != -1 {
-		// INSERT INTO table #bind(param)
-		result.WriteString(strings.TrimSpace(sql[:bindPos]))
-		result.WriteString("\n")
-		result.WriteString(strings.TrimSpace(sql[bindPos+1:]))
-		return result.String()
-	}
-
 	// Check for VALUES
 	valuesPos := strings.Index(sql, " VALUES ")
 	if valuesPos == -1 {
@@ -551,30 +575,7 @@ func formatInsertSQL(sql string) string {
 func formatUpdateSQL(sql string) string {
 	var result strings.Builder
 
-	// Check for #bind syntax (entity mode)
-	bindPos := strings.Index(sql, " #bind(")
-	if bindPos != -1 {
-		wherePos := findKeywordOutsideSubquery(sql, " WHERE ")
-
-		// UPDATE table
-		result.WriteString(strings.TrimSpace(sql[:bindPos]))
-		result.WriteString("\n")
-
-		if wherePos == -1 {
-			// #bind(param) without WHERE
-			result.WriteString(strings.TrimSpace(sql[bindPos+1:]))
-		} else {
-			// #bind(param) with WHERE
-			result.WriteString(strings.TrimSpace(sql[bindPos+1 : wherePos]))
-			result.WriteString("\n")
-			// WHERE clause
-			whereClause := strings.TrimSpace(sql[wherePos+1:])
-			result.WriteString(formatWhereClause(whereClause))
-		}
-		return result.String()
-	}
-
-	// Find SET position (field mode)
+	// Find SET position
 	setPos := strings.Index(sql, " SET ")
 	if setPos == -1 {
 		return sql

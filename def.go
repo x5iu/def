@@ -57,16 +57,24 @@ func Func[T any](string, ...any) T { var zero T; return zero }
 
 // Create defines an INSERT operation.
 // It can take either a struct pointer (entity mode) or Set expressions (field mode).
-// Entity mode example: def.Create(user) generates "INSERT INTO users #bind(user)"
-// Field mode example: def.Create(def.Set(user.Name, name), def.Set(user.Age, age))
-// generates "INSERT INTO users (name, age) VALUES (${name}, ${age})"
+// Entity mode: def.Create(user)
+//
+//	generates "INSERT INTO users (name, age) VALUES (${user.Name}, ${user.Age})"
+//
+// Field mode: def.Create(def.Set(user.Name, name), def.Set(user.Age, age))
+//
+//	generates "INSERT INTO users (name, age) VALUES (${name}, ${age})"
 func Create(...any) any { return nil }
 
 // Update defines an UPDATE operation.
 // It can take either a struct pointer (entity mode) or Set expressions (field mode).
-// Entity mode: def.Update(user, def.Filter(user.ID == id)) generates "UPDATE users #bind(user) WHERE id = ${id}"
+// Entity mode: def.Update(user, def.Filter(user.ID == user.ID))
+//
+//	generates "UPDATE users SET name = ${user.Name}, age = ${user.Age} WHERE id = ${user.ID}"
+//
 // Field mode: def.Update(def.Set(user.Name, name), def.Filter(user.ID == id))
-// generates "UPDATE users SET name = ${name} WHERE id = ${id}"
+//
+//	generates "UPDATE users SET name = ${name} WHERE id = ${id}"
 func Update(any, ...any) any { return nil }
 
 // Delete defines a DELETE operation.

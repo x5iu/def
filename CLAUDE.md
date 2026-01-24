@@ -159,7 +159,7 @@ Recursively formats filter tree:
 **Function**: `GenerateMutationSQL(pkg *Package, method *MutationMethod) (string, error)`
 
 Generates mutation SQL statements:
-- `MethodKindCreate` → `INSERT INTO table (col1, col2) VALUES (${val1}, ${val2})` or `INSERT INTO table #bind(param)`
+- `MethodKindCreate` → `INSERT INTO table (col1, col2) VALUES (${val1}, ${val2})`
 - `MethodKindUpdate` → `UPDATE table SET col1 = ${val1} WHERE condition`
 - `MethodKindDelete` → `DELETE FROM table WHERE condition`
 
@@ -267,7 +267,8 @@ def.Column(def.Func[string]("COALESCE", user.Name, "default"))  // Custom functi
 ### Create Expressions (INSERT)
 ```go
 // Entity mode - inserts entire struct
-def.Create(user)                                // INSERT INTO users #bind(user)
+def.Create(user)                                // INSERT INTO users (id, name, age)
+                                                // VALUES (${user.ID}, ${user.Name}, ${user.Age})
 
 // Field mode - inserts specific columns
 def.Create(                                     // INSERT INTO users (name, age)
@@ -278,6 +279,12 @@ def.Create(                                     // INSERT INTO users (name, age)
 
 ### Update Expressions
 ```go
+// Entity mode - updates entire struct (primary key excluded from SET)
+def.Update(user, def.Filter(user.ID == user.ID))  // UPDATE users
+                                                   // SET name = ${user.Name}, age = ${user.Age}
+                                                   // WHERE id = ${user.ID}
+
+// Field mode - updates specific columns
 def.Update(                                     // UPDATE users
     def.Set(user.Name, name),                   // SET name = ${name}
     def.Filter(user.ID == id),                  // WHERE id = ${id}
@@ -307,23 +314,32 @@ def.Delete(                                     // DELETE FROM users
 
 type UserRepository interface {
     // FindByID query constbind
-    // SELECT * FROM users WHERE id = ${id}
+    // SELECT *
+    // FROM users
+    // WHERE id = ${id}
     FindByID(ctx context.Context, id int64) (*User, error)
 
     // FindByStatus query constbind
-    // SELECT * FROM users WHERE status = 'active' AND age > ${minAge}
+    // SELECT *
+    // FROM users
+    // WHERE status = 'active'
+    //   AND age > ${minAge}
     FindByStatus(ctx context.Context, minAge int) ([]*User, error)
 
     // CreateUser exec constbind
-    // INSERT INTO users #bind(user)
+    // INSERT INTO users (id, name, age)
+    // VALUES (${user.ID}, ${user.Name}, ${user.Age})
     CreateUser(ctx context.Context, user *User) (sql.Result, error)
 
     // UpdateUserName exec constbind
-    // UPDATE users SET name = ${name} WHERE id = ${id}
+    // UPDATE users
+    // SET name = ${name}
+    // WHERE id = ${id}
     UpdateUserName(ctx context.Context, id int64, name string) (sql.Result, error)
 
     // DeleteUser exec constbind
-    // DELETE FROM users WHERE id = ${id}
+    // DELETE FROM users
+    // WHERE id = ${id}
     DeleteUser(ctx context.Context, id int64) (sql.Result, error)
 }
 ```

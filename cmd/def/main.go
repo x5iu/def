@@ -53,6 +53,7 @@ Supported expressions:
     - def.Create(def.Set(user.Name, name), ...) // field mode
 
   Update:
+    - def.Update(user, def.Filter(user.ID == user.ID))  // entity mode
     - def.Update(def.Set(user.Name, name), def.Filter(user.ID == id))
 
   Delete:
