@@ -420,3 +420,270 @@ func formatSetValue(value SetValue) string {
 	}
 	return ""
 }
+
+// FormatSQL formats a SQL statement with proper line breaks and indentation.
+// Rules:
+// - SELECT clause on its own line
+// - FROM clause on its own line
+// - WHERE clause on its own line
+// - AND/OR at the start of new lines with indentation
+// - Subqueries stay on the same line
+// - INSERT/UPDATE/DELETE are formatted similarly
+func FormatSQL(sql string) string {
+	sql = strings.TrimSpace(sql)
+	if sql == "" {
+		return ""
+	}
+
+	var result strings.Builder
+
+	switch {
+	case strings.HasPrefix(sql, "SELECT "):
+		result.WriteString(formatSelectSQL(sql))
+	case strings.HasPrefix(sql, "INSERT INTO "):
+		result.WriteString(formatInsertSQL(sql))
+	case strings.HasPrefix(sql, "UPDATE "):
+		result.WriteString(formatUpdateSQL(sql))
+	case strings.HasPrefix(sql, "DELETE FROM "):
+		result.WriteString(formatDeleteSQL(sql))
+	default:
+		result.WriteString(sql)
+	}
+
+	return result.String()
+}
+
+// formatSelectSQL formats a SELECT SQL statement.
+func formatSelectSQL(sql string) string {
+	var result strings.Builder
+
+	// Find FROM position (not inside subquery)
+	fromPos := findKeywordOutsideSubquery(sql, " FROM ")
+	if fromPos == -1 {
+		return sql
+	}
+
+	// SELECT clause
+	result.WriteString(strings.TrimSpace(sql[:fromPos]))
+	result.WriteString("\n")
+
+	// FROM clause
+	remaining := sql[fromPos+1:] // skip the leading space
+	wherePos := findKeywordOutsideSubquery(remaining, " WHERE ")
+
+	if wherePos == -1 {
+		// No WHERE clause
+		result.WriteString(strings.TrimSpace(remaining))
+		return result.String()
+	}
+
+	// FROM ... part
+	result.WriteString(strings.TrimSpace(remaining[:wherePos]))
+	result.WriteString("\n")
+
+	// WHERE clause
+	whereClause := strings.TrimSpace(remaining[wherePos+1:]) // skip the leading space
+	result.WriteString(formatWhereClause(whereClause))
+
+	return result.String()
+}
+
+// formatInsertSQL formats an INSERT SQL statement.
+func formatInsertSQL(sql string) string {
+	var result strings.Builder
+
+	// Check for #bind syntax
+	bindPos := strings.Index(sql, " #bind(")
+	if bindPos != -1 {
+		// INSERT INTO table #bind(param)
+		result.WriteString(strings.TrimSpace(sql[:bindPos]))
+		result.WriteString("\n")
+		result.WriteString(strings.TrimSpace(sql[bindPos+1:]))
+		return result.String()
+	}
+
+	// Check for VALUES
+	valuesPos := strings.Index(sql, " VALUES ")
+	if valuesPos == -1 {
+		return sql
+	}
+
+	// INSERT INTO table (cols)
+	result.WriteString(strings.TrimSpace(sql[:valuesPos]))
+	result.WriteString("\n")
+	// VALUES (...)
+	result.WriteString(strings.TrimSpace(sql[valuesPos+1:]))
+
+	return result.String()
+}
+
+// formatUpdateSQL formats an UPDATE SQL statement.
+func formatUpdateSQL(sql string) string {
+	var result strings.Builder
+
+	// Find SET position
+	setPos := strings.Index(sql, " SET ")
+	if setPos == -1 {
+		return sql
+	}
+
+	// UPDATE table
+	result.WriteString(strings.TrimSpace(sql[:setPos]))
+	result.WriteString("\n")
+
+	remaining := sql[setPos+1:] // skip the leading space
+
+	// Find WHERE position
+	wherePos := findKeywordOutsideSubquery(remaining, " WHERE ")
+	if wherePos == -1 {
+		// No WHERE clause
+		result.WriteString(strings.TrimSpace(remaining))
+		return result.String()
+	}
+
+	// SET ... part
+	result.WriteString(strings.TrimSpace(remaining[:wherePos]))
+	result.WriteString("\n")
+
+	// WHERE clause
+	whereClause := strings.TrimSpace(remaining[wherePos+1:])
+	result.WriteString(formatWhereClause(whereClause))
+
+	return result.String()
+}
+
+// formatDeleteSQL formats a DELETE SQL statement.
+func formatDeleteSQL(sql string) string {
+	var result strings.Builder
+
+	// Find WHERE position
+	wherePos := findKeywordOutsideSubquery(sql, " WHERE ")
+	if wherePos == -1 {
+		return sql
+	}
+
+	// DELETE FROM table
+	result.WriteString(strings.TrimSpace(sql[:wherePos]))
+	result.WriteString("\n")
+
+	// WHERE clause
+	whereClause := strings.TrimSpace(sql[wherePos+1:])
+	result.WriteString(formatWhereClause(whereClause))
+
+	return result.String()
+}
+
+// formatWhereClause formats a WHERE clause with proper AND/OR line breaks.
+func formatWhereClause(where string) string {
+	if !strings.HasPrefix(where, "WHERE ") {
+		return where
+	}
+
+	var result strings.Builder
+	result.WriteString("WHERE ")
+
+	// Get the condition part after "WHERE "
+	condition := where[6:]
+
+	// Split by AND/OR at the top level (not inside subqueries or parentheses)
+	parts := splitConditions(condition)
+
+	for i, part := range parts {
+		if i == 0 {
+			result.WriteString(strings.TrimSpace(part.condition))
+		} else {
+			result.WriteString("\n")
+			result.WriteString("  ") // indentation
+			result.WriteString(part.connector)
+			result.WriteString(" ")
+			result.WriteString(strings.TrimSpace(part.condition))
+		}
+	}
+
+	return result.String()
+}
+
+type conditionPart struct {
+	connector string // "AND" or "OR"
+	condition string
+}
+
+// splitConditions splits a WHERE condition by AND/OR at the top level.
+func splitConditions(condition string) []conditionPart {
+	var parts []conditionPart
+	var current strings.Builder
+	depth := 0
+	i := 0
+
+	for i < len(condition) {
+		c := condition[i]
+
+		if c == '(' {
+			depth++
+			current.WriteByte(c)
+			i++
+		} else if c == ')' {
+			depth--
+			current.WriteByte(c)
+			i++
+		} else if depth == 0 {
+			// Check for AND/OR at top level
+			remaining := condition[i:]
+			if strings.HasPrefix(remaining, " AND ") {
+				parts = append(parts, conditionPart{condition: current.String()})
+				current.Reset()
+				i += 5 // len(" AND ")
+				// The next part will have "AND" as connector
+				parts = append(parts, conditionPart{connector: "AND"})
+			} else if strings.HasPrefix(remaining, " OR ") {
+				parts = append(parts, conditionPart{condition: current.String()})
+				current.Reset()
+				i += 4 // len(" OR ")
+				parts = append(parts, conditionPart{connector: "OR"})
+			} else {
+				current.WriteByte(c)
+				i++
+			}
+		} else {
+			current.WriteByte(c)
+			i++
+		}
+	}
+
+	// Handle remaining content
+	if current.Len() > 0 {
+		if len(parts) > 0 && parts[len(parts)-1].condition == "" {
+			// Attach to the last connector
+			parts[len(parts)-1].condition = current.String()
+		} else {
+			parts = append(parts, conditionPart{condition: current.String()})
+		}
+	}
+
+	// Merge connector parts with their conditions
+	var merged []conditionPart
+	for i := 0; i < len(parts); i++ {
+		if parts[i].connector != "" && parts[i].condition != "" {
+			merged = append(merged, parts[i])
+		} else if parts[i].connector == "" && parts[i].condition != "" {
+			merged = append(merged, parts[i])
+		}
+	}
+
+	return merged
+}
+
+// findKeywordOutsideSubquery finds a keyword position that is not inside a subquery.
+func findKeywordOutsideSubquery(sql, keyword string) int {
+	depth := 0
+	for i := 0; i < len(sql); i++ {
+		if sql[i] == '(' {
+			depth++
+		} else if sql[i] == ')' {
+			depth--
+		} else if depth == 0 && strings.HasPrefix(sql[i:], keyword) {
+			return i
+		}
+	}
+	return -1
+}
