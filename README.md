@@ -334,7 +334,16 @@ Use `def.Create` to generate INSERT statements:
 func (q *querier) CreateUser(ctx context.Context, user *User) (sql.Result, error) {
     return def.Create(user)
 }
-// Generates: INSERT INTO users (id, name, age) VALUES (${user.ID}, ${user.Name}, ${user.Age})
+// Generates:
+// INSERT INTO users (
+//     id,
+//     name,
+//     age
+// ) VALUES (
+//     ${user.ID},
+//     ${user.Name},
+//     ${user.Age}
+// )
 ```
 
 **Field Mode** - Insert specific columns:
@@ -347,7 +356,14 @@ func (q *querier) CreateUser(ctx context.Context, name string, age int) (sql.Res
         def.Set(user.Age, age),
     )
 }
-// Generates: INSERT INTO users (name, age) VALUES (${name}, ${age})
+// Generates:
+// INSERT INTO users (
+//     name,
+//     age
+// ) VALUES (
+//     ${name},
+//     ${age}
+// )
 ```
 
 #### Update
@@ -446,8 +462,15 @@ type Querier interface {
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
 
     // CreateUser exec constbind
-    // INSERT INTO users (id, name, age)
-    // VALUES (${user.ID}, ${user.Name}, ${user.Age})
+    // INSERT INTO users (
+    //     id,
+    //     name,
+    //     age
+    // ) VALUES (
+    //     ${user.ID},
+    //     ${user.Name},
+    //     ${user.Age}
+    // )
     CreateUser(ctx context.Context, user *User) (sql.Result, error)
 
     // UpdateUserName exec constbind
@@ -473,7 +496,7 @@ Each method comment contains:
 - `<columns>` is `*` by default, or specific columns/functions if `def.Column` is used
 
 **Mutation methods**:
-- INSERT: `INSERT INTO <table> (<cols>) VALUES (<vals>)`
+- INSERT: `INSERT INTO <table> (<cols>) VALUES (<vals>)` (each column and value on its own line)
 - UPDATE: `UPDATE <table> SET <assignments> WHERE <conditions>`
 - DELETE: `DELETE FROM <table> WHERE <conditions>`
 
@@ -677,8 +700,15 @@ type Querier interface {
     GetProjectByUsername(ctx context.Context, username string) ([]*Project, error)
 
     // CreateUser exec constbind
-    // INSERT INTO users (id, name, age)
-    // VALUES (${user.ID}, ${user.Name}, ${user.Age})
+    // INSERT INTO users (
+    //     id,
+    //     name,
+    //     age
+    // ) VALUES (
+    //     ${user.ID},
+    //     ${user.Name},
+    //     ${user.Age}
+    // )
     CreateUser(ctx context.Context, user *User) (sql.Result, error)
 
     // UpdateUserName exec constbind

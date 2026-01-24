@@ -168,7 +168,7 @@ Recursively formats filter tree:
 **Function**: `GenerateMutationSQL(pkg *Package, method *MutationMethod) (string, error)`
 
 Generates mutation SQL statements:
-- `MethodKindCreate` → `INSERT INTO table (col1, col2) VALUES (${val1}, ${val2})`
+- `MethodKindCreate` → `INSERT INTO table (col1, col2) VALUES (${val1}, ${val2})` (each column and value on its own line)
 - `MethodKindUpdate` → `UPDATE table SET col1 = ${val1} WHERE condition`
 - `MethodKindDelete` → `DELETE FROM table WHERE condition`
 
@@ -285,14 +285,24 @@ def.Offset(offset)                              // OFFSET ${offset}
 ### Create Expressions (INSERT)
 ```go
 // Entity mode - inserts entire struct
-def.Create(user)                                // INSERT INTO users (id, name, age)
-                                                // VALUES (${user.ID}, ${user.Name}, ${user.Age})
+def.Create(user)                                // INSERT INTO users (
+                                                //     id,
+                                                //     name,
+                                                //     age
+                                                // ) VALUES (
+                                                //     ${user.ID},
+                                                //     ${user.Name},
+                                                //     ${user.Age}
+                                                // )
 
 // Field mode - inserts specific columns
-def.Create(                                     // INSERT INTO users (name, age)
-    def.Set(user.Name, name),                   // VALUES (${name}, ${age})
-    def.Set(user.Age, age),
-)
+def.Create(                                     // INSERT INTO users (
+    def.Set(user.Name, name),                   //     name,
+    def.Set(user.Age, age),                     //     age
+)                                               // ) VALUES (
+                                                //     ${name},
+                                                //     ${age}
+                                                // )
 ```
 
 ### Update Expressions
@@ -358,8 +368,15 @@ type UserRepository interface {
     FindTop10(ctx context.Context) ([]*User, error)
 
     // CreateUser exec constbind
-    // INSERT INTO users (id, name, age)
-    // VALUES (${user.ID}, ${user.Name}, ${user.Age})
+    // INSERT INTO users (
+    //     id,
+    //     name,
+    //     age
+    // ) VALUES (
+    //     ${user.ID},
+    //     ${user.Name},
+    //     ${user.Age}
+    // )
     CreateUser(ctx context.Context, user *User) (sql.Result, error)
 
     // UpdateUserName exec constbind

@@ -591,7 +591,7 @@ func formatSelectSQL(sql string) string {
 	return result.String()
 }
 
-// formatInsertSQL formats an INSERT SQL statement.
+// formatInsertSQL formats an INSERT SQL statement with each field on its own line.
 func formatInsertSQL(sql string) string {
 	var result strings.Builder
 
@@ -601,13 +601,73 @@ func formatInsertSQL(sql string) string {
 		return sql
 	}
 
-	// INSERT INTO table (cols)
-	result.WriteString(strings.TrimSpace(sql[:valuesPos]))
-	result.WriteString("\n")
-	// VALUES (...)
-	result.WriteString(strings.TrimSpace(sql[valuesPos+1:]))
+	insertPart := sql[:valuesPos]   // "INSERT INTO table (col1, col2, col3)"
+	valuesPart := sql[valuesPos+8:] // "(val1, val2, val3)"
+
+	// Parse columns from insertPart
+	openParen := strings.Index(insertPart, "(")
+	if openParen == -1 {
+		return sql
+	}
+
+	tablePart := strings.TrimSpace(insertPart[:openParen])        // "INSERT INTO table"
+	columnsPart := insertPart[openParen+1 : len(insertPart)-1]    // "col1, col2, col3"
+	columns := strings.Split(columnsPart, ", ")
+
+	// Parse values
+	valuesPart = strings.TrimSpace(valuesPart)
+	valuesPart = valuesPart[1 : len(valuesPart)-1] // Remove parentheses
+	values := splitValues(valuesPart)              // Handle nested ${...}
+
+	// Build formatted output
+	result.WriteString(tablePart)
+	result.WriteString(" (\n")
+	for i, col := range columns {
+		result.WriteString("    ")
+		result.WriteString(strings.TrimSpace(col))
+		if i < len(columns)-1 {
+			result.WriteString(",")
+		}
+		result.WriteString("\n")
+	}
+	result.WriteString(") VALUES (\n")
+	for i, val := range values {
+		result.WriteString("    ")
+		result.WriteString(strings.TrimSpace(val))
+		if i < len(values)-1 {
+			result.WriteString(",")
+		}
+		result.WriteString("\n")
+	}
+	result.WriteString(")")
 
 	return result.String()
+}
+
+// splitValues splits VALUES content, handling nested ${...} expressions.
+func splitValues(s string) []string {
+	var values []string
+	var current strings.Builder
+	depth := 0
+
+	for _, c := range s {
+		if c == '{' {
+			depth++
+			current.WriteRune(c)
+		} else if c == '}' {
+			depth--
+			current.WriteRune(c)
+		} else if c == ',' && depth == 0 {
+			values = append(values, current.String())
+			current.Reset()
+		} else {
+			current.WriteRune(c)
+		}
+	}
+	if current.Len() > 0 {
+		values = append(values, current.String())
+	}
+	return values
 }
 
 // formatUpdateSQL formats an UPDATE SQL statement.
