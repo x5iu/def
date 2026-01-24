@@ -63,8 +63,9 @@ func Func[T any](string, ...any) T { var zero T; return zero }
 func Create(...any) any { return nil }
 
 // Update defines an UPDATE operation.
-// It requires at least one Set expression for the columns to update, and optional Filter expressions for the WHERE clause.
-// Example: def.Update(def.Set(user.Name, name), def.Filter(user.ID == id))
+// It can take either a struct pointer (entity mode) or Set expressions (field mode).
+// Entity mode: def.Update(user, def.Filter(user.ID == id)) generates "UPDATE users #bind(user) WHERE id = ${id}"
+// Field mode: def.Update(def.Set(user.Name, name), def.Filter(user.ID == id))
 // generates "UPDATE users SET name = ${name} WHERE id = ${id}"
 func Update(any, ...any) any { return nil }
 

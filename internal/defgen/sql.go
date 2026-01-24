@@ -294,7 +294,37 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 		return "", fmt.Errorf("could not determine table for method %s", method.Name)
 	}
 
-	// Build SET clause
+	// Entity mode: UPDATE table #bind(param) WHERE ...
+	if method.EntityParam != nil {
+		sql := fmt.Sprintf("UPDATE %s #bind(%s)", tableName, method.EntityParam.Name)
+
+		// Build WHERE clause
+		if len(method.Filters) > 0 {
+			var conditions []string
+			for _, filter := range method.Filters {
+				analyzed, err := AnalyzeFilter(pkg, filter)
+				if err != nil {
+					return "", err
+				}
+				if analyzed == nil {
+					continue
+				}
+
+				cond := formatFilterTree(analyzed)
+				if cond != "" {
+					conditions = append(conditions, cond)
+				}
+			}
+
+			if len(conditions) > 0 {
+				sql += " WHERE " + strings.Join(conditions, " AND ")
+			}
+		}
+
+		return sql, nil
+	}
+
+	// Field mode: UPDATE table SET col1 = val1, col2 = val2 WHERE ...
 	var setClause []string
 	for _, set := range method.Sets {
 		colName := resolveSetColumnName(pkg, set)
@@ -521,7 +551,30 @@ func formatInsertSQL(sql string) string {
 func formatUpdateSQL(sql string) string {
 	var result strings.Builder
 
-	// Find SET position
+	// Check for #bind syntax (entity mode)
+	bindPos := strings.Index(sql, " #bind(")
+	if bindPos != -1 {
+		wherePos := findKeywordOutsideSubquery(sql, " WHERE ")
+
+		// UPDATE table
+		result.WriteString(strings.TrimSpace(sql[:bindPos]))
+		result.WriteString("\n")
+
+		if wherePos == -1 {
+			// #bind(param) without WHERE
+			result.WriteString(strings.TrimSpace(sql[bindPos+1:]))
+		} else {
+			// #bind(param) with WHERE
+			result.WriteString(strings.TrimSpace(sql[bindPos+1 : wherePos]))
+			result.WriteString("\n")
+			// WHERE clause
+			whereClause := strings.TrimSpace(sql[wherePos+1:])
+			result.WriteString(formatWhereClause(whereClause))
+		}
+		return result.String()
+	}
+
+	// Find SET position (field mode)
 	setPos := strings.Index(sql, " SET ")
 	if setPos == -1 {
 		return sql

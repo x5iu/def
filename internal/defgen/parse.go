@@ -967,13 +967,14 @@ func parseMutationMethod(pkg *Package, fn *ast.FuncDecl, kind MethodKind, mutati
 		method.EntityParam = entityParam
 
 	case MethodKindUpdate:
-		targetType, sets, filters, err := parseUpdateArgs(pkg, mutationCall, structs, method.Params)
+		targetType, sets, filters, entityParam, err := parseUpdateArgs(pkg, mutationCall, structs, method.Params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Update args: %w", err)
 		}
 		method.TargetType = targetType
 		method.Sets = sets
 		method.Filters = filters
+		method.EntityParam = entityParam
 
 	case MethodKindDelete:
 		targetType, filters, err := parseDeleteArgs(pkg, mutationCall, structs, method.Params)
@@ -1041,8 +1042,46 @@ func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 }
 
 // parseUpdateArgs parses arguments for def.Update().
-// Returns (targetType, sets, filters, error).
-func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, []*FilterExpr, error) {
+// Returns (targetType, sets, filters, entityParam, error).
+func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, []*FilterExpr, *ParamInfo, error) {
+	if len(call.Args) == 0 {
+		return "", nil, nil, nil, fmt.Errorf("def.Update requires at least 1 argument")
+	}
+
+	// Check if first argument is an identifier (entity mode) or a def.Set call (field mode)
+	firstArg := call.Args[0]
+	if ident, ok := firstArg.(*ast.Ident); ok {
+		// Check if this identifier is a method parameter (entity mode)
+		for i := range params {
+			if params[i].Name == ident.Name {
+				targetType := getTypeName(params[i].Type)
+
+				// Parse remaining arguments for Filter expressions
+				var filters []*FilterExpr
+				for _, arg := range call.Args[1:] {
+					argCall, ok := arg.(*ast.CallExpr)
+					if !ok {
+						continue
+					}
+
+					if isDefCall(pkg, argCall, "Filter") {
+						if len(argCall.Args) != 1 {
+							return "", nil, nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
+						}
+						filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
+						if err != nil {
+							return "", nil, nil, nil, err
+						}
+						filters = append(filters, filter)
+					}
+				}
+
+				return targetType, nil, filters, &params[i], nil
+			}
+		}
+	}
+
+	// Field mode: def.Update(def.Set(...), def.Set(...), def.Filter(...))
 	var sets []SetExpr
 	var filters []*FilterExpr
 	var targetType string
@@ -1056,7 +1095,7 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 		if isDefCall(pkg, argCall, "Set") {
 			setExpr, err := parseSetExpr(pkg, argCall, structs, params)
 			if err != nil {
-				return "", nil, nil, err
+				return "", nil, nil, nil, err
 			}
 
 			// Determine target type from the first Set's field path
@@ -1070,21 +1109,21 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 
 		if isDefCall(pkg, argCall, "Filter") {
 			if len(argCall.Args) != 1 {
-				return "", nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
+				return "", nil, nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
 			}
 			filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
 			if err != nil {
-				return "", nil, nil, err
+				return "", nil, nil, nil, err
 			}
 			filters = append(filters, filter)
 		}
 	}
 
 	if len(sets) == 0 {
-		return "", nil, nil, fmt.Errorf("def.Update requires at least one Set expression")
+		return "", nil, nil, nil, fmt.Errorf("def.Update requires at least one Set expression")
 	}
 
-	return targetType, sets, filters, nil
+	return targetType, sets, filters, nil, nil
 }
 
 // parseDeleteArgs parses arguments for def.Delete().

@@ -158,7 +158,7 @@ type MutationMethod struct {
 	TargetType  string        // Target struct type name (e.g., "User")
 	Sets        []SetExpr     // SET expressions for Create/Update
 	Filters     []*FilterExpr // WHERE conditions for Update/Delete
-	EntityParam *ParamInfo    // Entity parameter for Create entity mode
+	EntityParam *ParamInfo    // Entity parameter for Create/Update entity mode
 	Pos         token.Pos     // Position in source
 }
 
