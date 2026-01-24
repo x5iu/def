@@ -150,6 +150,15 @@ func parseTableBindings(pkg *Package, structs map[string]*structInfo) error {
 					Fields:      si.fields,
 					ForeignKeys: si.foreignKeys,
 				}
+
+				// Find and set the primary key field
+				for i := range si.fields {
+					if si.fields[i].IsPrimaryKey {
+						binding.PrimaryKey = &si.fields[i]
+						break
+					}
+				}
+
 				pkg.Tables[typeName] = binding
 			}
 

@@ -8,9 +8,10 @@ import (
 
 // FieldInfo represents a struct field with its db tag mapping.
 type FieldInfo struct {
-	GoName string // Go field name, e.g., "ID"
-	DBName string // Database column name from db tag, e.g., "id"
-	Type   types.Type
+	GoName       string // Go field name, e.g., "ID"
+	DBName       string // Database column name from db tag, e.g., "id"
+	Type         types.Type
+	IsPrimaryKey bool // true if this field has primary_key:"true" tag
 }
 
 // ForeignKeyInfo represents a foreign key relationship.
@@ -27,6 +28,7 @@ type TableBinding struct {
 	TableName   string           // e.g., "users"
 	Fields      []FieldInfo      // db tag fields
 	ForeignKeys []ForeignKeyInfo // foreign_key tag fields
+	PrimaryKey  *FieldInfo       // primary key field (marked with primary_key:"true")
 }
 
 // ParamInfo represents a method parameter.

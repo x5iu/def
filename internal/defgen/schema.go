@@ -37,11 +37,15 @@ func parseStructTags(structType *types.Struct) (fields []FieldInfo, foreignKeys 
 			continue
 		}
 
+		// Parse primary_key tag
+		pkTag := st.Get("primary_key")
+
 		// Regular database field
 		fi := FieldInfo{
-			GoName: field.Name(),
-			DBName: dbTag,
-			Type:   field.Type(),
+			GoName:       field.Name(),
+			DBName:       dbTag,
+			Type:         field.Type(),
+			IsPrimaryKey: pkTag == "true",
 		}
 		fields = append(fields, fi)
 	}

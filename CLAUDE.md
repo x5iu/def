@@ -5,7 +5,7 @@
 `def` is a code generation tool similar to Google Wire. It scans Go code containing `def.Query` + `def.Filter` definitions and generates interface implementations with SQL comments.
 
 ### Key Features
-- Parses struct definitions with `db` and `foreign_key` tags
+- Parses struct definitions with `db`, `foreign_key`, and `primary_key` tags
 - Reads table bindings from `def.Init` + `def.BindTable[T]("table")` calls
 - Analyzes `def.Query` + `def.Filter` expressions to generate SQL WHERE clauses
 - Supports foreign key traversal for generating subqueries
@@ -57,6 +57,7 @@ Scanning happens in 4 steps:
 #### Step 1: `parseAllStructs()`
 - Scans all struct type declarations
 - Parses `db` tags for column mappings
+- Parses `primary_key` tags to identify primary key fields
 - Parses `foreign_key` tags for relationships
 - Stores in `map[string]*structInfo`
 
@@ -190,6 +191,34 @@ Output is formatted with `go/format`.
 | `FieldPathElement` | Element in field access path (e.g., `project.User.Name`) |
 | `RelationMethod` | Generated relation query method |
 | `CallbackMethod` | Generated Callback implementation |
+
+## Struct Tags
+
+The following struct tags are supported:
+
+| Tag | Description | Example |
+|-----|-------------|---------|
+| `db` | Maps Go field to database column | `db:"id"` |
+| `primary_key` | Marks field as primary key | `primary_key:"true"` |
+| `foreign_key` | Defines foreign key relationship | `foreign_key:"user_id"` |
+
+### Example
+
+```go
+type User struct {
+    ID   int64  `db:"id" primary_key:"true"`
+    Name string `db:"name"`
+}
+
+type Project struct {
+    ID     int64  `db:"id" primary_key:"true"`
+    Name   string `db:"name"`
+    UserID int64  `db:"user_id"`
+    User   *User  `db:"-" foreign_key:"user_id"`
+}
+```
+
+**Note**: The `primary_key:"true"` tag is required for proper foreign key subquery generation and Callback method generation.
 
 ## Supported Expressions
 

@@ -75,17 +75,8 @@ func analyzeBelongsTo(pkg *Package, _ *TableBinding, fk ForeignKeyInfo) *Relatio
 		return nil
 	}
 
-	// Find the primary key field (assume it's "id" or first field with db tag "id")
-	var pkField *FieldInfo
-	for i := range refTable.Fields {
-		if refTable.Fields[i].DBName == "id" {
-			pkField = &refTable.Fields[i]
-			break
-		}
-	}
-	if pkField == nil && len(refTable.Fields) > 0 {
-		pkField = &refTable.Fields[0]
-	}
+	// Find the primary key field from primary_key tag
+	pkField := refTable.PrimaryKey
 	if pkField == nil {
 		return nil
 	}
@@ -158,19 +149,10 @@ func addCallbackField(callbackMap map[string]*CallbackMethod, table *TableBindin
 
 	cb, ok := callbackMap[table.TypeName]
 	if !ok {
-		// Find the ID field for caching
-		var idField *FieldInfo
-		for i := range table.Fields {
-			if table.Fields[i].DBName == "id" {
-				idField = &table.Fields[i]
-				break
-			}
-		}
-
 		cb = &CallbackMethod{
 			StructName:     table.TypeName,
 			StructTypeName: "*" + table.TypeName,
-			IDField:        idField,
+			IDField:        table.PrimaryKey,
 		}
 		callbackMap[table.TypeName] = cb
 	}
@@ -247,34 +229,19 @@ func addHasManyCallbackField(pkg *Package, callbackMap map[string]*CallbackMetho
 	// Get or create the callback for the referenced table
 	cb, ok := callbackMap[refTypeName]
 	if !ok {
-		// Find the ID field for caching
-		var idField *FieldInfo
-		for i := range refTable.Fields {
-			if refTable.Fields[i].DBName == "id" {
-				idField = &refTable.Fields[i]
-				break
-			}
-		}
-
 		cb = &CallbackMethod{
 			StructName:     refTypeName,
 			StructTypeName: "*" + refTypeName,
-			IDField:        idField,
+			IDField:        refTable.PrimaryKey,
 		}
 		callbackMap[refTypeName] = cb
 	}
 
-	// Find the ID field in the referenced table
-	var idFieldName string
-	for _, field := range refTable.Fields {
-		if field.DBName == "id" {
-			idFieldName = field.GoName
-			break
-		}
-	}
-	if idFieldName == "" {
+	// Get the primary key field name from the referenced table
+	if refTable.PrimaryKey == nil {
 		return
 	}
+	idFieldName := refTable.PrimaryKey.GoName
 
 	// Generate method name
 	paramName := snakeToCamel(fk.KeyColumn)

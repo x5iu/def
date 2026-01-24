@@ -145,9 +145,9 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 					// Get the referenced type's table
 					refTypeName := getTypeName(fk.RefType)
 					refBinding, ok := pkg.Tables[refTypeName]
-					if ok {
+					if ok && refBinding.PrimaryKey != nil {
 						analyzed.SubqueryTable = refBinding.TableName
-						analyzed.SubqueryIDField = "id" // Assume primary key is "id"
+						analyzed.SubqueryIDField = refBinding.PrimaryKey.DBName
 
 						// Get the field column name from the last element
 						if fkIndex+1 < len(path) {
