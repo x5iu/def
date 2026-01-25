@@ -102,6 +102,13 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 		return nil, fmt.Errorf("failed to analyze relations: %w", err)
 	}
 
+	// Add build tag if tags are specified (negated to exclude generated file when source files are included)
+	if opts != nil && opts.Tags != "" {
+		buildConstraint := generateBuildConstraint(opts.Tags)
+		buf.WriteString(buildConstraint)
+		buf.WriteString("\n\n")
+	}
+
 	// Write package declaration
 	buf.WriteString(fmt.Sprintf("package %s\n\n", pkg.PkgName))
 
@@ -544,4 +551,21 @@ func generateSliceCallbackMethod(alias *SliceTypeAlias, interfaceName string) st
 	sb.WriteString("}\n\n")
 
 	return sb.String()
+}
+
+// generateBuildConstraint generates a negated build constraint from tags.
+// Input: "def" -> Output: "//go:build !def"
+// Input: "def,test" -> Output: "//go:build !def && !test"
+// Input: "def test" -> Output: "//go:build !def && !test"
+func generateBuildConstraint(tags string) string {
+	var tagList []string
+	for _, tag := range strings.FieldsFunc(tags, func(r rune) bool {
+		return r == ',' || r == ' '
+	}) {
+		tag = strings.TrimSpace(tag)
+		if tag != "" {
+			tagList = append(tagList, "!"+tag)
+		}
+	}
+	return "//go:build " + strings.Join(tagList, " && ")
 }
