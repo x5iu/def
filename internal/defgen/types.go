@@ -160,15 +160,25 @@ type SetValue struct {
 
 // MutationMethod represents a mutation method (INSERT/UPDATE/DELETE).
 type MutationMethod struct {
-	Kind        MethodKind    // Create, Update, or Delete
-	Name        string        // Method name
-	Receiver    string        // Receiver type name
-	Params      []ParamInfo   // Method parameters
-	TargetType  string        // Target struct type name (e.g., "User")
-	Sets        []SetExpr     // SET expressions for Create/Update
-	Filters     []*FilterExpr // WHERE conditions for Update/Delete
-	EntityParam *ParamInfo    // Entity parameter for Create/Update entity mode
-	Pos         token.Pos     // Position in source
+	Kind          MethodKind          // Create, Update, or Delete
+	Name          string              // Method name
+	Receiver      string              // Receiver type name
+	Params        []ParamInfo         // Method parameters
+	TargetType    string              // Target struct type name (e.g., "User")
+	Sets          []SetExpr           // SET expressions for Create/Update
+	Filters       []*FilterExpr       // WHERE conditions for Update/Delete
+	EntityParam   *ParamInfo          // Entity parameter for Create/Update entity mode
+	Pos           token.Pos           // Position in source
+	ReturnType    *MutationReturnType // Return type info (nil means sql.Result)
+	ReturningCols []ColumnExpr        // postgres.Returning() specified columns (empty with ReturnType means RETURNING *)
+}
+
+// MutationReturnType represents the return type of a mutation method.
+type MutationReturnType struct {
+	Type       types.Type // The actual return type
+	IsSlice    bool       // Whether it returns a slice
+	StructName string     // Struct name (e.g., "User")
+	IsScalar   bool       // Whether it's a scalar type (int64, string, etc.)
 }
 
 // Package represents a parsed package with all def-related information.

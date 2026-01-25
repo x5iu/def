@@ -13,6 +13,7 @@ import (
 )
 
 const defPkgPath = "github.com/x5iu/def"
+const postgresPkgPath = "github.com/x5iu/def/dialects/postgres"
 
 // Load loads and parses packages matching a pattern.
 // The tags parameter specifies build tags for parsing source files (e.g., "def" to include files with //go:build def).
@@ -755,7 +756,7 @@ func parseComparisonExpr(pkg *Package, expr *ast.BinaryExpr, structs map[string]
 }
 
 // parseFilterOperand parses one side of a filter expression.
-func parseFilterOperand(pkg *Package, expr ast.Expr, structs map[string]*structInfo, params []ParamInfo, expectField bool) (FilterOperand, error) {
+func parseFilterOperand(pkg *Package, expr ast.Expr, structs map[string]*structInfo, params []ParamInfo, _ bool) (FilterOperand, error) {
 	operand := FilterOperand{}
 
 	switch e := expr.(type) {
@@ -1018,19 +1019,27 @@ func parseMutationMethod(pkg *Package, fn *ast.FuncDecl, kind MethodKind, mutati
 		}
 	}
 
+	// Parse return type to detect if RETURNING is needed
+	if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
+		firstResult := fn.Type.Results.List[0]
+		resultType := pkg.TypesInfo.TypeOf(firstResult.Type)
+		method.ReturnType = analyzeMutationReturnType(resultType)
+	}
+
 	// Parse mutation-specific arguments
 	switch kind {
 	case MethodKindCreate:
-		targetType, sets, entityParam, err := parseCreateArgs(pkg, mutationCall, structs, method.Params)
+		targetType, sets, entityParam, returningCols, err := parseCreateArgs(pkg, mutationCall, structs, method.Params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Create args: %w", err)
 		}
 		method.TargetType = targetType
 		method.Sets = sets
 		method.EntityParam = entityParam
+		method.ReturningCols = returningCols
 
 	case MethodKindUpdate:
-		targetType, sets, filters, entityParam, err := parseUpdateArgs(pkg, mutationCall, structs, method.Params)
+		targetType, sets, filters, entityParam, returningCols, err := parseUpdateArgs(pkg, mutationCall, structs, method.Params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Update args: %w", err)
 		}
@@ -1038,42 +1047,60 @@ func parseMutationMethod(pkg *Package, fn *ast.FuncDecl, kind MethodKind, mutati
 		method.Sets = sets
 		method.Filters = filters
 		method.EntityParam = entityParam
+		method.ReturningCols = returningCols
 
 	case MethodKindDelete:
-		targetType, filters, err := parseDeleteArgs(pkg, mutationCall, structs, method.Params)
+		targetType, filters, returningCols, err := parseDeleteArgs(pkg, mutationCall, structs, method.Params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Delete args: %w", err)
 		}
 		method.TargetType = targetType
 		method.Filters = filters
+		method.ReturningCols = returningCols
 	}
 
 	return method, nil
 }
 
 // parseCreateArgs parses arguments for def.Create().
-// Returns (targetType, sets, entityParam, error).
-func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, *ParamInfo, error) {
+// Returns (targetType, sets, entityParam, returningCols, error).
+func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, *ParamInfo, []ColumnExpr, error) {
 	if len(call.Args) == 0 {
-		return "", nil, nil, fmt.Errorf("def.Create requires at least 1 argument")
+		return "", nil, nil, nil, fmt.Errorf("def.Create requires at least 1 argument")
 	}
+
+	var returningCols []ColumnExpr
 
 	// Check if first argument is a def.Set call (field mode) or an identifier (entity mode)
 	firstArg := call.Args[0]
 	if setCall, ok := firstArg.(*ast.CallExpr); ok && isDefCall(pkg, setCall, "Set") {
-		// Field mode: def.Create(def.Set(...), def.Set(...))
+		// Field mode: def.Create(def.Set(...), def.Set(...), postgres.Returning(...))
 		var sets []SetExpr
 		var targetType string
 
 		for _, arg := range call.Args {
 			argCall, ok := arg.(*ast.CallExpr)
-			if !ok || !isDefCall(pkg, argCall, "Set") {
+			if !ok {
+				continue
+			}
+
+			// Check for postgres.Returning()
+			if isPostgresReturningCall(pkg, argCall) {
+				cols, err := parseReturningColumns(pkg, argCall, structs, params)
+				if err != nil {
+					return "", nil, nil, nil, err
+				}
+				returningCols = cols
+				continue
+			}
+
+			if !isDefCall(pkg, argCall, "Set") {
 				continue
 			}
 
 			setExpr, err := parseSetExpr(pkg, argCall, structs, params)
 			if err != nil {
-				return "", nil, nil, err
+				return "", nil, nil, nil, err
 			}
 
 			// Determine target type from the first Set's field path
@@ -1084,32 +1111,49 @@ func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 			sets = append(sets, setExpr)
 		}
 
-		return targetType, sets, nil, nil
+		return targetType, sets, nil, returningCols, nil
 	}
 
-	// Entity mode: def.Create(user)
+	// Entity mode: def.Create(user) or def.Create(user, postgres.Returning())
 	ident, ok := firstArg.(*ast.Ident)
 	if !ok {
-		return "", nil, nil, fmt.Errorf("def.Create in entity mode requires an identifier")
+		return "", nil, nil, nil, fmt.Errorf("def.Create in entity mode requires an identifier")
+	}
+
+	// Check for additional arguments (postgres.Returning())
+	for _, arg := range call.Args[1:] {
+		argCall, ok := arg.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		if isPostgresReturningCall(pkg, argCall) {
+			cols, err := parseReturningColumns(pkg, argCall, structs, params)
+			if err != nil {
+				return "", nil, nil, nil, err
+			}
+			returningCols = cols
+		}
 	}
 
 	// Find the parameter
 	for i := range params {
 		if params[i].Name == ident.Name {
 			targetType := getTypeName(params[i].Type)
-			return targetType, nil, &params[i], nil
+			return targetType, nil, &params[i], returningCols, nil
 		}
 	}
 
-	return "", nil, nil, fmt.Errorf("unknown identifier in Create: %s", ident.Name)
+	return "", nil, nil, nil, fmt.Errorf("unknown identifier in Create: %s", ident.Name)
 }
 
 // parseUpdateArgs parses arguments for def.Update().
-// Returns (targetType, sets, filters, entityParam, error).
-func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, []*FilterExpr, *ParamInfo, error) {
+// Returns (targetType, sets, filters, entityParam, returningCols, error).
+func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, []*FilterExpr, *ParamInfo, []ColumnExpr, error) {
 	if len(call.Args) == 0 {
-		return "", nil, nil, nil, fmt.Errorf("def.Update requires at least 1 argument")
+		return "", nil, nil, nil, nil, fmt.Errorf("def.Update requires at least 1 argument")
 	}
+
+	var returningCols []ColumnExpr
 
 	// Check if first argument is an identifier (entity mode) or a def.Set call (field mode)
 	firstArg := call.Args[0]
@@ -1119,7 +1163,7 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 			if params[i].Name == ident.Name {
 				targetType := getTypeName(params[i].Type)
 
-				// Parse remaining arguments for Filter expressions
+				// Parse remaining arguments for Filter and Returning expressions
 				var filters []*FilterExpr
 				for _, arg := range call.Args[1:] {
 					argCall, ok := arg.(*ast.CallExpr)
@@ -1127,24 +1171,34 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 						continue
 					}
 
+					// Check for postgres.Returning()
+					if isPostgresReturningCall(pkg, argCall) {
+						cols, err := parseReturningColumns(pkg, argCall, structs, params)
+						if err != nil {
+							return "", nil, nil, nil, nil, err
+						}
+						returningCols = cols
+						continue
+					}
+
 					if isDefCall(pkg, argCall, "Filter") {
 						if len(argCall.Args) != 1 {
-							return "", nil, nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
+							return "", nil, nil, nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
 						}
 						filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
 						if err != nil {
-							return "", nil, nil, nil, err
+							return "", nil, nil, nil, nil, err
 						}
 						filters = append(filters, filter)
 					}
 				}
 
-				return targetType, nil, filters, &params[i], nil
+				return targetType, nil, filters, &params[i], returningCols, nil
 			}
 		}
 	}
 
-	// Field mode: def.Update(def.Set(...), def.Set(...), def.Filter(...))
+	// Field mode: def.Update(def.Set(...), def.Set(...), def.Filter(...), postgres.Returning(...))
 	var sets []SetExpr
 	var filters []*FilterExpr
 	var targetType string
@@ -1155,10 +1209,20 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 			continue
 		}
 
+		// Check for postgres.Returning()
+		if isPostgresReturningCall(pkg, argCall) {
+			cols, err := parseReturningColumns(pkg, argCall, structs, params)
+			if err != nil {
+				return "", nil, nil, nil, nil, err
+			}
+			returningCols = cols
+			continue
+		}
+
 		if isDefCall(pkg, argCall, "Set") {
 			setExpr, err := parseSetExpr(pkg, argCall, structs, params)
 			if err != nil {
-				return "", nil, nil, nil, err
+				return "", nil, nil, nil, nil, err
 			}
 
 			// Determine target type from the first Set's field path
@@ -1172,28 +1236,29 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 
 		if isDefCall(pkg, argCall, "Filter") {
 			if len(argCall.Args) != 1 {
-				return "", nil, nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
+				return "", nil, nil, nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
 			}
 			filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
 			if err != nil {
-				return "", nil, nil, nil, err
+				return "", nil, nil, nil, nil, err
 			}
 			filters = append(filters, filter)
 		}
 	}
 
 	if len(sets) == 0 {
-		return "", nil, nil, nil, fmt.Errorf("def.Update requires at least one Set expression")
+		return "", nil, nil, nil, nil, fmt.Errorf("def.Update requires at least one Set expression")
 	}
 
-	return targetType, sets, filters, nil, nil
+	return targetType, sets, filters, nil, returningCols, nil
 }
 
 // parseDeleteArgs parses arguments for def.Delete().
-// Returns (targetType, filters, error).
-func parseDeleteArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []*FilterExpr, error) {
+// Returns (targetType, filters, returningCols, error).
+func parseDeleteArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []*FilterExpr, []ColumnExpr, error) {
 	var filters []*FilterExpr
 	var targetType string
+	var returningCols []ColumnExpr
 
 	for _, arg := range call.Args {
 		argCall, ok := arg.(*ast.CallExpr)
@@ -1201,13 +1266,23 @@ func parseDeleteArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 			continue
 		}
 
+		// Check for postgres.Returning()
+		if isPostgresReturningCall(pkg, argCall) {
+			cols, err := parseReturningColumns(pkg, argCall, structs, params)
+			if err != nil {
+				return "", nil, nil, err
+			}
+			returningCols = cols
+			continue
+		}
+
 		if isDefCall(pkg, argCall, "Filter") {
 			if len(argCall.Args) != 1 {
-				return "", nil, fmt.Errorf("def.Filter requires exactly 1 argument")
+				return "", nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
 			}
 			filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
 			if err != nil {
-				return "", nil, err
+				return "", nil, nil, err
 			}
 
 			// Determine target type from filter's field path
@@ -1222,7 +1297,7 @@ func parseDeleteArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 	// If no filters, we need to determine target type from the method's receiver context
 	// This will be handled in SQL generation by looking at the interface or receiver type
 
-	return targetType, filters, nil
+	return targetType, filters, returningCols, nil
 }
 
 // parseSetExpr parses a def.Set(field, value) call.
@@ -1258,7 +1333,7 @@ func parseSetExpr(pkg *Package, call *ast.CallExpr, structs map[string]*structIn
 }
 
 // parseSetValue parses the value part of a def.Set call.
-func parseSetValue(pkg *Package, expr ast.Expr, params []ParamInfo) (SetValue, error) {
+func parseSetValue(_ *Package, expr ast.Expr, params []ParamInfo) (SetValue, error) {
 	var value SetValue
 
 	switch e := expr.(type) {
@@ -1283,4 +1358,102 @@ func parseSetValue(pkg *Package, expr ast.Expr, params []ParamInfo) (SetValue, e
 	default:
 		return value, fmt.Errorf("unsupported Set value type: %T", expr)
 	}
+}
+
+// isPostgresReturningCall checks if a call expression is a postgres.Returning() call.
+func isPostgresReturningCall(pkg *Package, call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+
+	if sel.Sel.Name != "Returning" {
+		return false
+	}
+
+	ident, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+
+	obj := pkg.TypesInfo.Uses[ident]
+	if obj == nil {
+		return false
+	}
+
+	pkgName, ok := obj.(*types.PkgName)
+	if !ok {
+		return false
+	}
+
+	return pkgName.Imported().Path() == postgresPkgPath
+}
+
+// isSqlResultType checks if a type is database/sql.Result.
+func isSqlResultType(t types.Type) bool {
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	return named.Obj().Pkg() != nil &&
+		named.Obj().Pkg().Path() == "database/sql" &&
+		named.Obj().Name() == "Result"
+}
+
+// analyzeMutationReturnType analyzes the return type of a mutation method.
+// Returns nil if the return type is sql.Result (default mutation return type).
+func analyzeMutationReturnType(t types.Type) *MutationReturnType {
+	if t == nil {
+		return nil
+	}
+
+	// Check for sql.Result
+	if isSqlResultType(t) {
+		return nil
+	}
+
+	result := &MutationReturnType{
+		Type: t,
+	}
+
+	// Check for slice type
+	if slice, ok := t.(*types.Slice); ok {
+		result.IsSlice = true
+		t = slice.Elem()
+	}
+
+	// Check for pointer type
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	// Check for named type (struct)
+	if named, ok := t.(*types.Named); ok {
+		result.StructName = named.Obj().Name()
+		return result
+	}
+
+	// Check for basic type (scalar)
+	if basic, ok := t.(*types.Basic); ok {
+		result.IsScalar = true
+		result.StructName = basic.Name()
+		return result
+	}
+
+	return result
+}
+
+// parseReturningColumns parses columns from postgres.Returning() arguments.
+func parseReturningColumns(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) ([]ColumnExpr, error) {
+	var columns []ColumnExpr
+
+	for _, arg := range call.Args {
+		col, err := parseColumnExpr(pkg, arg, structs, params)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse Returning column: %w", err)
+		}
+		columns = append(columns, col)
+	}
+
+	return columns, nil
 }

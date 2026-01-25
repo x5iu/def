@@ -269,6 +269,8 @@ func generateInsertSQL(pkg *Package, method *MutationMethod) (string, error) {
 		return "", fmt.Errorf("could not determine table for method %s", method.Name)
 	}
 
+	var sql string
+
 	// Entity mode: INSERT INTO table (col1, col2) VALUES (${param.Field1}, ${param.Field2})
 	if method.EntityParam != nil {
 		binding, ok := pkg.Tables[method.TargetType]
@@ -283,33 +285,38 @@ func generateInsertSQL(pkg *Package, method *MutationMethod) (string, error) {
 			values = append(values, fmt.Sprintf("${%s.%s}", method.EntityParam.Name, field.GoName))
 		}
 
-		return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+		sql = fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
 			tableName,
 			strings.Join(columns, ", "),
-			strings.Join(values, ", ")), nil
-	}
-
-	// Field mode: INSERT INTO table (col1, col2) VALUES (${val1}, ${val2})
-	if len(method.Sets) == 0 {
-		return "", fmt.Errorf("no columns specified for INSERT in method %s", method.Name)
-	}
-
-	var columns []string
-	var values []string
-
-	for _, set := range method.Sets {
-		colName := resolveSetColumnName(pkg, set)
-		if colName == "" {
-			continue
+			strings.Join(values, ", "))
+	} else {
+		// Field mode: INSERT INTO table (col1, col2) VALUES (${val1}, ${val2})
+		if len(method.Sets) == 0 {
+			return "", fmt.Errorf("no columns specified for INSERT in method %s", method.Name)
 		}
-		columns = append(columns, colName)
-		values = append(values, formatSetValue(set.Value))
+
+		var columns []string
+		var values []string
+
+		for _, set := range method.Sets {
+			colName := resolveSetColumnName(pkg, set)
+			if colName == "" {
+				continue
+			}
+			columns = append(columns, colName)
+			values = append(values, formatSetValue(set.Value))
+		}
+
+		sql = fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			tableName,
+			strings.Join(columns, ", "),
+			strings.Join(values, ", "))
 	}
 
-	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		tableName,
-		strings.Join(columns, ", "),
-		strings.Join(values, ", ")), nil
+	// Append RETURNING clause if needed
+	sql += generateReturningClause(pkg, method)
+
+	return sql, nil
 }
 
 // generateUpdateSQL generates an UPDATE SQL statement.
@@ -326,6 +333,8 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 	if tableName == "" {
 		return "", fmt.Errorf("could not determine table for method %s", method.Name)
 	}
+
+	var sql string
 
 	// Entity mode: UPDATE table SET col1 = ${param.Field1}, col2 = ${param.Field2} WHERE ...
 	if method.EntityParam != nil {
@@ -348,7 +357,7 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 			return "", fmt.Errorf("no columns to update for method %s", method.Name)
 		}
 
-		sql := fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", "))
+		sql = fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", "))
 
 		// Build WHERE clause
 		if len(method.Filters) > 0 {
@@ -372,48 +381,49 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 				sql += " WHERE " + strings.Join(conditions, " AND ")
 			}
 		}
-
-		return sql, nil
-	}
-
-	// Field mode: UPDATE table SET col1 = val1, col2 = val2 WHERE ...
-	var setClause []string
-	for _, set := range method.Sets {
-		colName := resolveSetColumnName(pkg, set)
-		if colName == "" {
-			continue
-		}
-		setClause = append(setClause, fmt.Sprintf("%s = %s", colName, formatSetValue(set.Value)))
-	}
-
-	if len(setClause) == 0 {
-		return "", fmt.Errorf("no columns specified for UPDATE in method %s", method.Name)
-	}
-
-	sql := fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", "))
-
-	// Build WHERE clause
-	if len(method.Filters) > 0 {
-		var conditions []string
-		for _, filter := range method.Filters {
-			analyzed, err := AnalyzeFilter(pkg, filter)
-			if err != nil {
-				return "", err
-			}
-			if analyzed == nil {
+	} else {
+		// Field mode: UPDATE table SET col1 = val1, col2 = val2 WHERE ...
+		var setClause []string
+		for _, set := range method.Sets {
+			colName := resolveSetColumnName(pkg, set)
+			if colName == "" {
 				continue
 			}
+			setClause = append(setClause, fmt.Sprintf("%s = %s", colName, formatSetValue(set.Value)))
+		}
 
-			cond := formatFilterTree(analyzed)
-			if cond != "" {
-				conditions = append(conditions, cond)
+		if len(setClause) == 0 {
+			return "", fmt.Errorf("no columns specified for UPDATE in method %s", method.Name)
+		}
+
+		sql = fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", "))
+
+		// Build WHERE clause
+		if len(method.Filters) > 0 {
+			var conditions []string
+			for _, filter := range method.Filters {
+				analyzed, err := AnalyzeFilter(pkg, filter)
+				if err != nil {
+					return "", err
+				}
+				if analyzed == nil {
+					continue
+				}
+
+				cond := formatFilterTree(analyzed)
+				if cond != "" {
+					conditions = append(conditions, cond)
+				}
+			}
+
+			if len(conditions) > 0 {
+				sql += " WHERE " + strings.Join(conditions, " AND ")
 			}
 		}
-
-		if len(conditions) > 0 {
-			sql += " WHERE " + strings.Join(conditions, " AND ")
-		}
 	}
+
+	// Append RETURNING clause if needed
+	sql += generateReturningClause(pkg, method)
 
 	return sql, nil
 }
@@ -458,6 +468,9 @@ func generateDeleteSQL(pkg *Package, method *MutationMethod) (string, error) {
 		}
 	}
 
+	// Append RETURNING clause if needed
+	sql += generateReturningClause(pkg, method)
+
 	return sql, nil
 }
 
@@ -501,6 +514,23 @@ func formatSetValue(value SetValue) string {
 		return value.LiteralValue
 	}
 	return ""
+}
+
+// generateReturningClause generates the RETURNING clause for PostgreSQL.
+// Returns empty string if no RETURNING is needed.
+func generateReturningClause(pkg *Package, method *MutationMethod) string {
+	// No ReturnType means return sql.Result, so no RETURNING
+	if method.ReturnType == nil {
+		return ""
+	}
+
+	// If explicit columns are specified, use them
+	if len(method.ReturningCols) > 0 {
+		return " RETURNING " + buildSelectClause(pkg, method.ReturningCols)
+	}
+
+	// Otherwise, return all columns (RETURNING *)
+	return " RETURNING *"
 }
 
 // FormatSQL formats a SQL statement with proper line breaks and indentation.

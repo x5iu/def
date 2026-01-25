@@ -633,3 +633,359 @@ func containsHelper(s, substr string) bool {
 	}
 	return false
 }
+
+func TestGenerateReturningClause(t *testing.T) {
+	pkg := &Package{
+		Tables: map[string]*TableBinding{
+			"User": {
+				TypeName:  "User",
+				TableName: "users",
+				Fields: []FieldInfo{
+					{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+					{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+					{GoName: "Age", DBName: "age", IsPrimaryKey: false},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		method *MutationMethod
+		want   string
+	}{
+		{
+			name: "no return type - no RETURNING",
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+				ReturnType:  nil, // sql.Result
+			},
+			want: "",
+		},
+		{
+			name: "has return type without explicit columns - RETURNING *",
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+				ReturnType: &MutationReturnType{
+					StructName: "User",
+				},
+				ReturningCols: nil, // No explicit columns
+			},
+			want: " RETURNING *",
+		},
+		{
+			name: "has return type with empty explicit columns - RETURNING *",
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+				ReturnType: &MutationReturnType{
+					StructName: "User",
+				},
+				ReturningCols: []ColumnExpr{}, // Empty slice
+			},
+			want: " RETURNING *",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := generateReturningClause(pkg, tt.method)
+			if got != tt.want {
+				t.Errorf("generateReturningClause() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAnalyzeMutationReturnType(t *testing.T) {
+	tests := []struct {
+		name       string
+		returnType *MutationReturnType
+		wantNil    bool
+	}{
+		{
+			name:       "nil type returns nil",
+			returnType: analyzeMutationReturnType(nil),
+			wantNil:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantNil && tt.returnType != nil {
+				t.Errorf("analyzeMutationReturnType() = %v, want nil", tt.returnType)
+			}
+		})
+	}
+}
+
+func TestGenerateMutationSQLWithReturning(t *testing.T) {
+	tests := []struct {
+		name           string
+		pkg            *Package
+		method         *MutationMethod
+		wantContains   []string
+		wantNotContain []string
+		wantErr        bool
+	}{
+		// INSERT with RETURNING
+		{
+			name: "insert with RETURNING *",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+				ReturnType: &MutationReturnType{
+					StructName: "User",
+				},
+			},
+			wantContains: []string{
+				"INSERT INTO users",
+				"RETURNING *",
+			},
+			wantErr: false,
+		},
+		{
+			name: "insert without RETURNING (sql.Result)",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+				ReturnType:  nil, // sql.Result
+			},
+			wantContains:   []string{"INSERT INTO users"},
+			wantNotContain: []string{"RETURNING"},
+			wantErr:        false,
+		},
+		// UPDATE with RETURNING
+		{
+			name: "update with RETURNING *",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindUpdate,
+				Name:        "UpdateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+				ReturnType: &MutationReturnType{
+					StructName: "User",
+				},
+			},
+			wantContains: []string{
+				"UPDATE users SET",
+				"RETURNING *",
+			},
+			wantErr: false,
+		},
+		{
+			name: "update without RETURNING",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindUpdate,
+				Name:        "UpdateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+				ReturnType:  nil,
+			},
+			wantContains:   []string{"UPDATE users SET"},
+			wantNotContain: []string{"RETURNING"},
+			wantErr:        false,
+		},
+		// DELETE with RETURNING
+		{
+			name: "delete with RETURNING *",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:       MethodKindDelete,
+				Name:       "DeleteUser",
+				TargetType: "User",
+				ReturnType: &MutationReturnType{
+					StructName: "User",
+				},
+			},
+			wantContains: []string{
+				"DELETE FROM users",
+				"RETURNING *",
+			},
+			wantErr: false,
+		},
+		{
+			name: "delete without RETURNING",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:       MethodKindDelete,
+				Name:       "DeleteUser",
+				TargetType: "User",
+				ReturnType: nil,
+			},
+			wantContains:   []string{"DELETE FROM users"},
+			wantNotContain: []string{"RETURNING"},
+			wantErr:        false,
+		},
+		// INSERT with scalar return type (RETURNING *)
+		{
+			name: "insert with scalar return type",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+				ReturnType: &MutationReturnType{
+					IsScalar:   true,
+					StructName: "int64",
+				},
+				// No explicit ReturningCols, will use RETURNING *
+			},
+			wantContains: []string{
+				"INSERT INTO users",
+				"RETURNING *",
+			},
+			wantErr: false,
+		},
+		// INSERT with slice return type
+		{
+			name: "insert with slice return type",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUsers",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+				ReturnType: &MutationReturnType{
+					IsSlice:    true,
+					StructName: "User",
+				},
+			},
+			wantContains: []string{
+				"INSERT INTO users",
+				"RETURNING *",
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := GenerateMutationSQL(tt.pkg, tt.method)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GenerateMutationSQL() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				return
+			}
+
+			for _, want := range tt.wantContains {
+				if !contains(got, want) {
+					t.Errorf("GenerateMutationSQL() = %q, want to contain %q", got, want)
+				}
+			}
+
+			for _, notWant := range tt.wantNotContain {
+				if contains(got, notWant) {
+					t.Errorf("GenerateMutationSQL() = %q, should NOT contain %q", got, notWant)
+				}
+			}
+		})
+	}
+}

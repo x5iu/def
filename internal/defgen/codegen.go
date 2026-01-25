@@ -175,7 +175,12 @@ func generateCode(pkg *Package) ([]byte, error) {
 
 		// Write method comment with SQL - first line uses //, SQL uses /* */
 		formattedSQL := FormatSQL(sql)
-		buf.WriteString(fmt.Sprintf("\t// %s exec constbind\n", method.Name))
+		// Use "query constbind" when RETURNING is used, otherwise "exec constbind"
+		if method.ReturnType != nil {
+			buf.WriteString(fmt.Sprintf("\t// %s query constbind\n", method.Name))
+		} else {
+			buf.WriteString(fmt.Sprintf("\t// %s exec constbind\n", method.Name))
+		}
 		buf.WriteString(fmt.Sprintf("\t/* %s */\n", formattedSQL))
 
 		// Write method signature
@@ -238,9 +243,12 @@ func collectImports(pkg *Package) []string {
 	// Always include context if methods use it (based on interface definition)
 	imports["context"] = true
 
-	// Add database/sql if we have mutation methods
-	if len(pkg.MutationMethods) > 0 {
-		imports["database/sql"] = true
+	// Add database/sql if we have mutation methods that return sql.Result (no RETURNING)
+	for _, method := range pkg.MutationMethods {
+		if method.ReturnType == nil {
+			imports["database/sql"] = true
+			break
+		}
 	}
 
 	// Add fmt and reflect if we have callback methods (for cache utilities)
@@ -334,8 +342,16 @@ func generateMutationMethodSignature(pkg *Package, method *MutationMethod) strin
 	sb.WriteString(strings.Join(params, ", "))
 	sb.WriteString(")")
 
-	// Return type is always (sql.Result, error)
-	sb.WriteString(" (sql.Result, error)")
+	// Return type depends on whether RETURNING is used
+	if method.ReturnType != nil {
+		// Use the actual return type when RETURNING is used
+		sb.WriteString(" (")
+		sb.WriteString(formatType(pkg, method.ReturnType.Type))
+		sb.WriteString(", error)")
+	} else {
+		// Default: (sql.Result, error)
+		sb.WriteString(" (sql.Result, error)")
+	}
 
 	return sb.String()
 }
