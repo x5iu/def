@@ -18,6 +18,8 @@ type GenerateOptions struct {
 	Output string
 	// Tags specifies build tags for parsing source files (e.g., "def" to include files with //go:build def).
 	Tags string
+	// InterfaceName specifies the name of the generated interface. If empty, it will try to find a matching interface.
+	InterfaceName string
 }
 
 // Generate generates code for packages matching the given pattern.
@@ -56,7 +58,7 @@ func Generate(wd, pattern string, opts *GenerateOptions) error {
 		}
 
 		// Generate the code
-		code, err := generateCode(pkg)
+		code, err := generateCode(pkg, opts)
 		if err != nil {
 			return err
 		}
@@ -92,7 +94,7 @@ func determineOutputPath(pkg *Package, outputOpt string) (string, error) {
 }
 
 // generateCode generates the code content.
-func generateCode(pkg *Package) ([]byte, error) {
+func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 	var buf bytes.Buffer
 
 	// Analyze relations
@@ -127,12 +129,19 @@ func generateCode(pkg *Package) ([]byte, error) {
 		buf.WriteString(generateCacheUtilities())
 	}
 
-	// Find the interface that matches our methods
-	interfaceInfo := findMatchingInterface(pkg)
-	if interfaceInfo == nil {
-		// Generate a default interface
+	// Determine interface name
+	var interfaceInfo *InterfaceInfo
+	if opts != nil && opts.InterfaceName != "" {
+		// Use user-specified interface name
 		interfaceInfo = &InterfaceInfo{
-			Name: "Querier",
+			Name: opts.InterfaceName,
+		}
+	} else {
+		// Find the interface that matches our methods
+		interfaceInfo = findMatchingInterface(pkg)
+		if interfaceInfo == nil {
+			// No matching interface found, return error
+			return nil, fmt.Errorf("no matching interface found for methods; use -T to specify interface name")
 		}
 	}
 

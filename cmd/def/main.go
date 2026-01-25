@@ -29,6 +29,7 @@ expressions to generate SQL statements (SELECT, INSERT, UPDATE, DELETE).`,
 
 	var outputPath string
 	var buildTags string
+	var interfaceName string
 
 	generateCmd := &cobra.Command{
 		Use:   "generate [patterns...]",
@@ -80,8 +81,9 @@ Supported expressions:
 			}
 
 			opts := &defgen.GenerateOptions{
-				Output: outputPath,
-				Tags:   buildTags,
+				Output:        outputPath,
+				Tags:          buildTags,
+				InterfaceName: interfaceName,
 			}
 
 			for _, pattern := range patterns {
@@ -95,6 +97,7 @@ Supported expressions:
 
 	generateCmd.Flags().StringVarP(&outputPath, "output", "o", "", "output file path (default: def_gen.go in package directory)")
 	generateCmd.Flags().StringVar(&buildTags, "tags", "", "build tags for parsing source files (e.g., \"def\" to include files with //go:build def)")
+	generateCmd.Flags().StringVarP(&interfaceName, "interface", "T", "", "name of the generated interface")
 	if err := generateCmd.MarkFlagFilename("output", "go"); err != nil {
 		log.Fatalf("failed to mark flag filename: %v", err)
 	}
