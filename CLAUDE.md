@@ -20,7 +20,7 @@
 
 - CLI uses `cobra` framework, defines `generate` command
 - Calls `defgen.Generate(wd, pattern, opts)`
-- Supports flags: `-o` (output file), `--tags` (build tags)
+- Supports flags: `-o` (output file), `--tags` (build tags for parsing source files)
 
 ```
 def generate [patterns...]
@@ -31,9 +31,10 @@ def generate -o query_gen.go .
 ### 2. Package Loading
 
 **File**: `internal/defgen/parse.go`
-**Function**: `Load(wd, pattern string) (*Package, error)`
+**Function**: `Load(wd, pattern string, tags string) ([]*Package, error)`
 
-Uses `golang.org/x/tools/go/packages` to load Go packages with the following mode:
+Uses `golang.org/x/tools/go/packages` to load Go packages with the following mode.
+When `tags` is non-empty, it sets `BuildFlags: []string{"-tags=" + tags}` to include files with specific build constraints:
 - `NeedName` - Package name
 - `NeedFiles` - Source file paths
 - `NeedSyntax` - Parsed AST
@@ -189,20 +190,19 @@ Also generates:
 ### 8. Code Generation
 
 **File**: `internal/defgen/codegen.go`
-**Function**: `generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error)`
+**Function**: `generateCode(pkg *Package) ([]byte, error)`
 
 Generates the output file:
 
-1. Build tags (if specified)
-2. Package declaration
-3. Import statements
-4. Slice type aliases (for Callback)
-5. Cache utilities (for avoiding circular references)
-6. `//go:generate` directive for defc
-7. Interface definition with:
+1. Package declaration
+2. Import statements
+3. Slice type aliases (for Callback)
+4. Cache utilities (for avoiding circular references)
+5. `//go:generate` directive for defc
+6. Interface definition with:
    - Method signature
    - SQL comment annotation
-8. Callback methods for structs
+7. Callback methods for structs
 
 Output is formatted with `go/format`.
 

@@ -16,8 +16,7 @@ import (
 type GenerateOptions struct {
 	// Output specifies the output file path. If empty, defaults to "def_gen.go" in the package directory.
 	Output string
-	// Tags specifies the build tags to add to the generated file.
-	// Example: "!test" will generate both "//go:build !test" and "// +build !test"
+	// Tags specifies build tags for parsing source files (e.g., "def" to include files with //go:build def).
 	Tags string
 }
 
@@ -27,7 +26,7 @@ func Generate(wd, pattern string, opts *GenerateOptions) error {
 		opts = &GenerateOptions{}
 	}
 
-	pkgs, err := Load(wd, pattern)
+	pkgs, err := Load(wd, pattern, opts.Tags)
 	if err != nil {
 		return err
 	}
@@ -57,7 +56,7 @@ func Generate(wd, pattern string, opts *GenerateOptions) error {
 		}
 
 		// Generate the code
-		code, err := generateCode(pkg, opts)
+		code, err := generateCode(pkg)
 		if err != nil {
 			return err
 		}
@@ -93,17 +92,12 @@ func determineOutputPath(pkg *Package, outputOpt string) (string, error) {
 }
 
 // generateCode generates the code content.
-func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
+func generateCode(pkg *Package) ([]byte, error) {
 	var buf bytes.Buffer
 
 	// Analyze relations
 	if err := AnalyzeRelations(pkg); err != nil {
 		return nil, fmt.Errorf("failed to analyze relations: %w", err)
-	}
-
-	// Write build tags if specified
-	if opts.Tags != "" {
-		buf.WriteString(fmt.Sprintf("//go:build %s\n\n", opts.Tags))
 	}
 
 	// Write package declaration

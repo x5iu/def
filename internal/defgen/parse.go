@@ -15,7 +15,8 @@ import (
 const defPkgPath = "github.com/x5iu/def"
 
 // Load loads and parses packages matching a pattern.
-func Load(wd, pattern string) ([]*Package, error) {
+// The tags parameter specifies build tags for parsing source files (e.g., "def" to include files with //go:build def).
+func Load(wd, pattern string, tags string) ([]*Package, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
 			packages.NeedFiles |
@@ -24,6 +25,9 @@ func Load(wd, pattern string) ([]*Package, error) {
 			packages.NeedTypesInfo |
 			packages.NeedImports,
 		Dir: wd,
+	}
+	if tags != "" {
+		cfg.BuildFlags = []string{"-tags=" + tags}
 	}
 
 	// Normalize relative patterns for packages.Load.

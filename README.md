@@ -37,7 +37,7 @@ If `-o/--output` is provided, it is treated as a file name relative to each pack
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--output` | `-o` | Output file path (default: `def_gen.go` in package directory) |
-| `--tags` | | Build tags to add to generated file |
+| `--tags` | | Build tags for parsing source files |
 
 **Examples:**
 
@@ -45,13 +45,12 @@ If `-o/--output` is provided, it is treated as a file name relative to each pack
 # Custom output file
 def generate -o query_gen.go .
 
-# Add build tags
-def generate --tags "!test" .
-# Output:
-#   //go:build !test
+# Include files with build tags
+def generate --tags def .
+# This will include files marked with //go:build def
 
 # Combine options
-def generate -o query_gen.go --tags "!test" .
+def generate -o query_gen.go --tags def .
 ```
 
 ## Input Format Specification

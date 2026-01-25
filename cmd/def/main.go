@@ -41,7 +41,7 @@ Examples:
   def generate ./internal/repo    Generate code for specific package
   def generate .                  Generate code for current package (default)
   def generate -o query_gen.go .  Generate to custom output file
-  def generate --tags "!test" .   Generate with build tags
+  def generate --tags def .       Include files with //go:build def
 
 Supported expressions:
   Query (SELECT):
@@ -94,7 +94,7 @@ Supported expressions:
 	}
 
 	generateCmd.Flags().StringVarP(&outputPath, "output", "o", "", "output file path (default: def_gen.go in package directory)")
-	generateCmd.Flags().StringVar(&buildTags, "tags", "", "build tags to add (e.g., \"!test\" generates //go:build !test)")
+	generateCmd.Flags().StringVar(&buildTags, "tags", "", "build tags for parsing source files (e.g., \"def\" to include files with //go:build def)")
 	if err := generateCmd.MarkFlagFilename("output", "go"); err != nil {
 		log.Fatalf("failed to mark flag filename: %v", err)
 	}
