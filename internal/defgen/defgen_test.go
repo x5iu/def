@@ -386,3 +386,250 @@ func TestFormatFuncOperand(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateMutationSQL(t *testing.T) {
+	tests := []struct {
+		name           string
+		pkg            *Package
+		method         *MutationMethod
+		wantContains   []string // SQL should contain these substrings
+		wantNotContain []string // SQL should NOT contain these substrings
+		wantErr        bool
+	}{
+		// INSERT entity mode tests
+		{
+			name: "insert entity mode - all fields included",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+							{GoName: "Age", DBName: "age", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+			},
+			wantContains: []string{
+				"INSERT INTO users",
+				"id", "name", "age",
+				"${user.ID}", "${user.Name}", "${user.Age}",
+			},
+			wantErr: false,
+		},
+		{
+			name: "insert entity mode - primary key included",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+			},
+			wantContains: []string{"id", "${user.ID}"},
+			wantErr:      false,
+		},
+		{
+			name: "insert entity mode - field order matches Fields slice",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+							{GoName: "Age", DBName: "age", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+			},
+			wantContains: []string{"(id, name, age)", "(${user.ID}, ${user.Name}, ${user.Age})"},
+			wantErr:      false,
+		},
+		// UPDATE entity mode tests
+		{
+			name: "update entity mode - primary key excluded from SET",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+							{GoName: "Age", DBName: "age", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindUpdate,
+				Name:        "UpdateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+			},
+			wantContains:   []string{"UPDATE users SET", "name = ${user.Name}", "age = ${user.Age}"},
+			wantNotContain: []string{"id = ${user.ID}"},
+			wantErr:        false,
+		},
+		{
+			name: "update entity mode - all non-pk fields in SET",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name", IsPrimaryKey: false},
+							{GoName: "Email", DBName: "email", IsPrimaryKey: false},
+							{GoName: "Age", DBName: "age", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindUpdate,
+				Name:        "UpdateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+			},
+			wantContains: []string{
+				"name = ${user.Name}",
+				"email = ${user.Email}",
+				"age = ${user.Age}",
+			},
+			wantNotContain: []string{"id = ${user.ID}"},
+			wantErr:        false,
+		},
+		{
+			name: "update entity mode - no primary key includes all fields",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"Setting": {
+						TypeName:  "Setting",
+						TableName: "settings",
+						Fields: []FieldInfo{
+							{GoName: "Key", DBName: "key", IsPrimaryKey: false},
+							{GoName: "Value", DBName: "value", IsPrimaryKey: false},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindUpdate,
+				Name:        "UpdateSetting",
+				TargetType:  "Setting",
+				EntityParam: &ParamInfo{Name: "setting"},
+			},
+			wantContains: []string{
+				"UPDATE settings SET",
+				"key = ${setting.Key}",
+				"value = ${setting.Value}",
+			},
+			wantErr: false,
+		},
+		// Error handling tests
+		{
+			name: "unknown target type",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUnknown",
+				TargetType:  "Unknown",
+				EntityParam: &ParamInfo{Name: "entity"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "update entity mode with only primary key fields",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"OnlyPK": {
+						TypeName:  "OnlyPK",
+						TableName: "only_pk",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindUpdate,
+				Name:        "UpdateOnlyPK",
+				TargetType:  "OnlyPK",
+				EntityParam: &ParamInfo{Name: "entity"},
+			},
+			wantErr: true, // Should error because no columns to update
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := GenerateMutationSQL(tt.pkg, tt.method)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GenerateMutationSQL() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				return
+			}
+
+			// Check that SQL contains expected substrings
+			for _, want := range tt.wantContains {
+				if !contains(got, want) {
+					t.Errorf("GenerateMutationSQL() = %q, want to contain %q", got, want)
+				}
+			}
+
+			// Check that SQL does NOT contain unwanted substrings
+			for _, notWant := range tt.wantNotContain {
+				if contains(got, notWant) {
+					t.Errorf("GenerateMutationSQL() = %q, should NOT contain %q", got, notWant)
+				}
+			}
+		})
+	}
+}
+
+// contains checks if s contains substr.
+func contains(s, substr string) bool {
+	return len(substr) > 0 && len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
