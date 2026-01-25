@@ -632,7 +632,15 @@ func formatInsertSQL(sql string) string {
 	}
 
 	insertPart := sql[:valuesPos]   // "INSERT INTO table (col1, col2, col3)"
-	valuesPart := sql[valuesPos+8:] // "(val1, val2, val3)"
+	valuesPart := sql[valuesPos+8:] // "(val1, val2, val3)" or "(val1, val2, val3) RETURNING *"
+
+	// Extract RETURNING clause if present
+	var returningClause string
+	returningPos := strings.Index(valuesPart, " RETURNING ")
+	if returningPos != -1 {
+		returningClause = valuesPart[returningPos:] // " RETURNING *" or " RETURNING id, name"
+		valuesPart = valuesPart[:returningPos]      // "(val1, val2, val3)"
+	}
 
 	// Parse columns from insertPart
 	openParen := strings.Index(insertPart, "(")
@@ -640,8 +648,8 @@ func formatInsertSQL(sql string) string {
 		return sql
 	}
 
-	tablePart := strings.TrimSpace(insertPart[:openParen])        // "INSERT INTO table"
-	columnsPart := insertPart[openParen+1 : len(insertPart)-1]    // "col1, col2, col3"
+	tablePart := strings.TrimSpace(insertPart[:openParen])     // "INSERT INTO table"
+	columnsPart := insertPart[openParen+1 : len(insertPart)-1] // "col1, col2, col3"
 	columns := strings.Split(columnsPart, ", ")
 
 	// Parse values
@@ -670,6 +678,12 @@ func formatInsertSQL(sql string) string {
 		result.WriteString("\n")
 	}
 	result.WriteString(")")
+
+	// Append RETURNING clause if present
+	if returningClause != "" {
+		result.WriteString("\n")
+		result.WriteString(strings.TrimSpace(returningClause))
+	}
 
 	return result.String()
 }
@@ -704,10 +718,18 @@ func splitValues(s string) []string {
 func formatUpdateSQL(sql string) string {
 	var result strings.Builder
 
+	// Extract RETURNING clause if present
+	var returningClause string
+	returningPos := strings.Index(sql, " RETURNING ")
+	if returningPos != -1 {
+		returningClause = sql[returningPos:]
+		sql = sql[:returningPos]
+	}
+
 	// Find SET position
 	setPos := strings.Index(sql, " SET ")
 	if setPos == -1 {
-		return sql
+		return sql + returningClause
 	}
 
 	// UPDATE table
@@ -721,16 +743,21 @@ func formatUpdateSQL(sql string) string {
 	if wherePos == -1 {
 		// No WHERE clause
 		result.WriteString(strings.TrimSpace(remaining))
-		return result.String()
+	} else {
+		// SET ... part
+		result.WriteString(strings.TrimSpace(remaining[:wherePos]))
+		result.WriteString("\n")
+
+		// WHERE clause
+		whereClause := strings.TrimSpace(remaining[wherePos+1:])
+		result.WriteString(formatWhereClause(whereClause))
 	}
 
-	// SET ... part
-	result.WriteString(strings.TrimSpace(remaining[:wherePos]))
-	result.WriteString("\n")
-
-	// WHERE clause
-	whereClause := strings.TrimSpace(remaining[wherePos+1:])
-	result.WriteString(formatWhereClause(whereClause))
+	// Append RETURNING clause if present
+	if returningClause != "" {
+		result.WriteString("\n")
+		result.WriteString(strings.TrimSpace(returningClause))
+	}
 
 	return result.String()
 }
@@ -739,19 +766,33 @@ func formatUpdateSQL(sql string) string {
 func formatDeleteSQL(sql string) string {
 	var result strings.Builder
 
+	// Extract RETURNING clause if present
+	var returningClause string
+	returningPos := strings.Index(sql, " RETURNING ")
+	if returningPos != -1 {
+		returningClause = sql[returningPos:]
+		sql = sql[:returningPos]
+	}
+
 	// Find WHERE position
 	wherePos := findKeywordOutsideSubquery(sql, " WHERE ")
 	if wherePos == -1 {
-		return sql
+		result.WriteString(strings.TrimSpace(sql))
+	} else {
+		// DELETE FROM table
+		result.WriteString(strings.TrimSpace(sql[:wherePos]))
+		result.WriteString("\n")
+
+		// WHERE clause
+		whereClause := strings.TrimSpace(sql[wherePos+1:])
+		result.WriteString(formatWhereClause(whereClause))
 	}
 
-	// DELETE FROM table
-	result.WriteString(strings.TrimSpace(sql[:wherePos]))
-	result.WriteString("\n")
-
-	// WHERE clause
-	whereClause := strings.TrimSpace(sql[wherePos+1:])
-	result.WriteString(formatWhereClause(whereClause))
+	// Append RETURNING clause if present
+	if returningClause != "" {
+		result.WriteString("\n")
+		result.WriteString(strings.TrimSpace(returningClause))
+	}
 
 	return result.String()
 }
