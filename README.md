@@ -38,6 +38,7 @@ If `-o/--output` is provided, it is treated as a file name relative to each pack
 |--------|-------|-------------|
 | `--output` | `-o` | Output file path (default: `def_gen.go` in package directory) |
 | `--tags` | | Build tags for parsing source files |
+| `--defc` | | Custom defc command for `//go:generate` directive (default: `go run -mod=mod github.com/x5iu/defc@latest`) |
 
 **Examples:**
 
@@ -51,6 +52,11 @@ def generate --tags def .
 
 # Combine options
 def generate -o query_gen.go --tags def .
+
+# Customize defc command in generated //go:generate directive
+def generate --defc "go tool defc" .
+def generate --defc "go run -mod=mod github.com/x5iu/defc@v0.5.0" .
+def generate --defc /usr/local/bin/defc .
 ```
 
 ## Input Format Specification

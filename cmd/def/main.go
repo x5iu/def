@@ -30,6 +30,7 @@ expressions to generate SQL statements (SELECT, INSERT, UPDATE, DELETE).`,
 	var outputPath string
 	var buildTags string
 	var interfaceName string
+	var defcCmd string
 
 	generateCmd := &cobra.Command{
 		Use:   "generate [patterns...]",
@@ -43,6 +44,7 @@ Examples:
   def generate .                  Generate code for current package (default)
   def generate -o query_gen.go .  Generate to custom output file
   def generate --tags def .       Include files with //go:build def
+  def generate --defc "go tool defc" .  Customize defc command
 
 Supported expressions:
   Query (SELECT):
@@ -84,6 +86,7 @@ Supported expressions:
 				Output:        outputPath,
 				Tags:          buildTags,
 				InterfaceName: interfaceName,
+				DefcCmd:       defcCmd,
 			}
 
 			for _, pattern := range patterns {
@@ -98,6 +101,7 @@ Supported expressions:
 	generateCmd.Flags().StringVarP(&outputPath, "output", "o", "", "output file path (default: def_gen.go in package directory)")
 	generateCmd.Flags().StringVar(&buildTags, "tags", "", "build tags for parsing source files (e.g., \"def\" to include files with //go:build def)")
 	generateCmd.Flags().StringVarP(&interfaceName, "interface", "T", "", "name of the generated interface")
+	generateCmd.Flags().StringVar(&defcCmd, "defc", "", "defc command for //go:generate directive (e.g., \"go tool defc\", \"defc\", default: \"go run -mod=mod github.com/x5iu/defc@latest\")")
 	if err := generateCmd.MarkFlagFilename("output", "go"); err != nil {
 		log.Fatalf("failed to mark flag filename: %v", err)
 	}
