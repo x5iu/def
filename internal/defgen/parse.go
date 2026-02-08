@@ -696,6 +696,12 @@ func parseFilterExprRecursive(pkg *Package, expr ast.Expr, structs map[string]*s
 		if isDefCall(pkg, e, "In") {
 			return parseInExpr(pkg, e, structs, params)
 		}
+		if isDefCall(pkg, e, "IsNull") {
+			return parseIsNullExpr(pkg, e, structs, params, token.EQL)
+		}
+		if isDefCall(pkg, e, "IsNotNull") {
+			return parseIsNullExpr(pkg, e, structs, params, token.NEQ)
+		}
 		return nil, fmt.Errorf("unsupported call expression in filter: %v", e)
 	default:
 		return nil, fmt.Errorf("unsupported filter expression type: %T", expr)
@@ -728,6 +734,26 @@ func parseInExpr(pkg *Package, call *ast.CallExpr, structs map[string]*structInf
 	filter.Right = right
 
 	return filter, nil
+}
+
+// parseIsNullExpr parses a def.IsNull(field) or def.IsNotNull(field) call.
+func parseIsNullExpr(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo, op token.Token) (*FilterExpr, error) {
+	if len(call.Args) != 1 {
+		return nil, fmt.Errorf("def.IsNull/IsNotNull requires exactly 1 argument, got %d", len(call.Args))
+	}
+
+	left, err := parseFilterOperand(pkg, call.Args[0], structs, params, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse IsNull field: %w", err)
+	}
+
+	return &FilterExpr{
+		Kind:  FilterComparison,
+		Op:    op,
+		Left:  left,
+		Right: FilterOperand{IsNil: true},
+		Pos:   call.Pos(),
+	}, nil
 }
 
 // parseComparisonExpr parses a binary comparison expression as a filter.

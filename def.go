@@ -20,6 +20,16 @@ func BindTable[T any](string) any { return nil }
 // Example: def.In(user.ID, ids) generates "id IN (${ids})"
 func In(any, any) bool { return false }
 
+// IsNull checks if a field is NULL.
+// Works with any field type including sql.NullString, sql.NullInt64, sql.Null[T], etc.
+// Example: def.Filter(def.IsNull(user.DeletedAt)) generates "WHERE deleted_at IS NULL"
+func IsNull(any) bool { return false }
+
+// IsNotNull checks if a field is not NULL.
+// Works with any field type including sql.NullString, sql.NullInt64, sql.Null[T], etc.
+// Example: def.Filter(def.IsNotNull(user.Name)) generates "WHERE name IS NOT NULL"
+func IsNotNull(any) bool { return false }
+
 // Column specifies a column to select in the query.
 // Without Column calls, the query defaults to SELECT *.
 // Example: def.Column(user.Name) generates "SELECT name"
