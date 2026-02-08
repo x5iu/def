@@ -779,6 +779,11 @@ func parseFilterOperand(pkg *Package, expr ast.Expr, structs map[string]*structI
 				return operand, nil
 			}
 		}
+		// Check for nil literal
+		if e.Name == "nil" {
+			operand.IsNil = true
+			return operand, nil
+		}
 		// Not a parameter, might be something else
 		return operand, fmt.Errorf("unknown identifier: %s", e.Name)
 

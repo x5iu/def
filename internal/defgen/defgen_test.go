@@ -258,6 +258,51 @@ func TestFormatFilterTree(t *testing.T) {
 			},
 			want: "(SUM(amount) > 1000 OR COUNT(id) > 10)",
 		},
+		{
+			name: "IS NULL",
+			filter: &AnalyzedFilter{
+				Kind:       AnalyzedFilterComparison,
+				ColumnName: "deleted_at",
+				Operator:   "IS NULL",
+				IsNull:     true,
+			},
+			want: "deleted_at IS NULL",
+		},
+		{
+			name: "IS NOT NULL",
+			filter: &AnalyzedFilter{
+				Kind:       AnalyzedFilterComparison,
+				ColumnName: "name",
+				Operator:   "IS NOT NULL",
+				IsNull:     true,
+			},
+			want: "name IS NOT NULL",
+		},
+		{
+			name: "AND with IS NULL",
+			filter: &AnalyzedFilter{
+				Kind: AnalyzedFilterAnd,
+				Children: []*AnalyzedFilter{
+					{Kind: AnalyzedFilterComparison, ColumnName: "status", Operator: "=", Value: "'active'"},
+					{Kind: AnalyzedFilterComparison, ColumnName: "deleted_at", Operator: "IS NULL", IsNull: true},
+				},
+			},
+			want: "(status = 'active' AND deleted_at IS NULL)",
+		},
+		{
+			name: "IS NULL subquery - foreign key",
+			filter: &AnalyzedFilter{
+				Kind:            AnalyzedFilterComparison,
+				IsSubquery:      true,
+				ForeignKeyCol:   "user_id",
+				SubqueryTable:   "users",
+				SubqueryColumn:  "deleted_at",
+				SubqueryIDField: "id",
+				Operator:        "IS NULL",
+				IsNull:          true,
+			},
+			want: "user_id IN (SELECT id FROM users WHERE deleted_at IS NULL)",
+		},
 	}
 
 	for _, tt := range tests {

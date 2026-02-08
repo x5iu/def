@@ -64,6 +64,7 @@ type FilterOperand struct {
 	IsLiteral bool   // true if this is a literal value
 	IsField   bool   // true if this is a field access
 	IsFunc    bool   // true if this is a function call
+	IsNil     bool   // true if this is a nil literal
 	ParamName string // parameter name if IsParam
 	// Field access path
 	FieldPath []FieldPathElement

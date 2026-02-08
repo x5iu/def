@@ -33,6 +33,9 @@ type AnalyzedFilter struct {
 	SubqueryValue   string // e.g., "${username}"
 	SubqueryIDField string // e.g., "id" (the primary key of referenced table)
 
+	// For IS NULL / IS NOT NULL checks
+	IsNull bool // true if this is an IS NULL or IS NOT NULL check
+
 	// For function operands
 	LeftIsFunc   bool   // true if left side is a function call
 	LeftFuncExpr string // Formatted function expression, e.g., "COUNT(id)"
@@ -202,6 +205,14 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 			analyzed.SubqueryValue = value
 		} else {
 			analyzed.Value = value
+		}
+	} else if filter.Right.IsNil {
+		analyzed.IsNull = true
+		switch filter.Op {
+		case token.EQL:
+			analyzed.Operator = "IS NULL"
+		case token.NEQ:
+			analyzed.Operator = "IS NOT NULL"
 		}
 	}
 

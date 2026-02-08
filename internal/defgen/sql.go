@@ -202,6 +202,24 @@ func formatFilterTree(filter *AnalyzedFilter) string {
 		return fmt.Sprintf("%s IN (%s)", filter.ColumnName, filter.Value)
 
 	case AnalyzedFilterComparison:
+		if filter.IsNull {
+			if filter.IsSubquery {
+				return fmt.Sprintf("%s IN (SELECT %s FROM %s WHERE %s %s)",
+					filter.ForeignKeyCol,
+					filter.SubqueryIDField,
+					filter.SubqueryTable,
+					filter.SubqueryColumn,
+					filter.Operator,
+				)
+			}
+			var leftSide string
+			if filter.LeftIsFunc {
+				leftSide = filter.LeftFuncExpr
+			} else {
+				leftSide = filter.ColumnName
+			}
+			return fmt.Sprintf("%s %s", leftSide, filter.Operator)
+		}
 		if filter.IsSubquery {
 			value := filter.SubqueryValue
 			if value == "" && filter.RightIsFunc {
