@@ -1,9 +1,15 @@
 package defgen
 
 import (
+	"bytes"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/x5iu/defc/gen"
+	"golang.org/x/tools/imports"
 )
 
 func TestTokenToSQLOp(t *testing.T) {
@@ -1135,5 +1141,80 @@ func TestGenerateMutationSQLWithReturning(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestInvokeDefcConsistency(t *testing.T) {
+	// Minimal intermediate Go file (simulates def generate output)
+	const intermediateSource = `package testpkg
+
+import "context"
+
+type Store interface {
+	// GetUserByID query constbind
+	/* SELECT *
+	FROM users
+	WHERE id = ${iD} */
+	GetUserByID(ctx context.Context, iD int64) (*User, error)
+}
+`
+
+	// Write to temp file
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "store.go")
+	if err := os.WriteFile(filePath, []byte(intermediateSource), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	interfaceName := "Store"
+	feats := []string{"sqlx/rebind", "sqlx/in"}
+
+	// Path A: direct defc API call
+	pkgName, _, pos, err := gen.DetectTargetDecl(filePath, []byte(intermediateSource), interfaceName)
+	if err != nil {
+		t.Fatalf("DetectTargetDecl failed: %v", err)
+	}
+
+	var bufA bytes.Buffer
+	builder := gen.NewCliBuilder(gen.ModeSqlx).
+		WithPkg(pkgName).
+		WithPwd(dir).
+		WithFile(filePath, []byte(intermediateSource)).
+		WithPos(pos).
+		WithFeats(feats)
+	if err := builder.Build(&bufA); err != nil {
+		t.Fatalf("direct defc Build failed: %v", err)
+	}
+
+	outputPathA := filepath.Join(dir, "store_impl_a.go")
+	resultA, err := imports.Process(outputPathA, bufA.Bytes(), &imports.Options{
+		Comments: true, TabIndent: true, TabWidth: 8,
+	})
+	if err != nil {
+		resultA = bufA.Bytes()
+	}
+
+	// Path B: invokeDefc
+	pkg := &Package{
+		CallbackMethods: nil, // no callbacks in this test
+	}
+	opts := &GenerateOptions{
+		InterfaceName: interfaceName,
+		DefcFeatures:  "sqlx/rebind,sqlx/in",
+		DefcGenerate:  true,
+	}
+	if err := invokeDefc(filePath, []byte(intermediateSource), pkg, opts); err != nil {
+		t.Fatalf("invokeDefc failed: %v", err)
+	}
+
+	resultB, err := os.ReadFile(filepath.Join(dir, "store_impl.go"))
+	if err != nil {
+		t.Fatalf("failed to read invokeDefc output: %v", err)
+	}
+
+	// Compare
+	if !bytes.Equal(resultA, resultB) {
+		t.Errorf("invokeDefc output differs from direct defc API output.\n--- Direct ---\n%s\n--- invokeDefc ---\n%s",
+			string(resultA), string(resultB))
 	}
 }

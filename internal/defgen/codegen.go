@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/x5iu/defc/gen"
 	"golang.org/x/tools/imports"
 )
 
@@ -28,6 +29,9 @@ type GenerateOptions struct {
 	// These are appended to the auto-detected features (e.g., "sqlx/callback").
 	// Example: "sqlx/rebind,sqlx/in".
 	DefcFeatures string
+	// DefcGenerate, when true, directly invokes defc code generation after writing
+	// the intermediate file, instead of emitting a //go:generate directive.
+	DefcGenerate bool
 }
 
 // Generate generates code for packages matching the given pattern.
@@ -84,6 +88,13 @@ func Generate(wd, pattern string, opts *GenerateOptions) error {
 		// Write the file
 		if err := os.WriteFile(outputPath, code, 0o644); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
+		}
+
+		// Directly invoke defc code generation if requested
+		if opts.DefcGenerate {
+			if err := invokeDefc(outputPath, code, pkg, opts); err != nil {
+				return fmt.Errorf("defc generate failed for %s: %w", outputPath, err)
+			}
 		}
 	}
 
@@ -160,23 +171,25 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 		}
 	}
 
-	// Generate go:generate directive for defc
-	defcCmd := "go run -mod=mod github.com/x5iu/defc@latest"
-	if opts != nil && opts.DefcCmd != "" {
-		defcCmd = opts.DefcCmd
-	}
-	var extraFeatures string
-	if opts != nil {
-		extraFeatures = opts.DefcFeatures
-	}
-	defcOutput := strings.ToLower(interfaceInfo.Name) + "_impl.go"
-	features := buildDefcFeatures(len(pkg.CallbackMethods) > 0, extraFeatures)
-	if features != "" {
-		buf.WriteString(fmt.Sprintf("//go:generate %s generate --features %s -T %s -o %s\n\n",
-			defcCmd, features, interfaceInfo.Name, defcOutput))
-	} else {
-		buf.WriteString(fmt.Sprintf("//go:generate %s generate -T %s -o %s\n\n",
-			defcCmd, interfaceInfo.Name, defcOutput))
+	// Generate go:generate directive for defc (skipped when DefcGenerate is true)
+	if opts == nil || !opts.DefcGenerate {
+		defcCmd := "go run -mod=mod github.com/x5iu/defc@latest"
+		if opts != nil && opts.DefcCmd != "" {
+			defcCmd = opts.DefcCmd
+		}
+		var extraFeatures string
+		if opts != nil {
+			extraFeatures = opts.DefcFeatures
+		}
+		defcOutput := strings.ToLower(interfaceInfo.Name) + "_impl.go"
+		features := buildDefcFeatures(len(pkg.CallbackMethods) > 0, extraFeatures)
+		if features != "" {
+			buf.WriteString(fmt.Sprintf("//go:generate %s generate --features %s -T %s -o %s\n\n",
+				defcCmd, features, interfaceInfo.Name, defcOutput))
+		} else {
+			buf.WriteString(fmt.Sprintf("//go:generate %s generate -T %s -o %s\n\n",
+				defcCmd, interfaceInfo.Name, defcOutput))
+		}
 	}
 
 	// Generate interface
@@ -571,6 +584,62 @@ func generateSliceCallbackMethod(alias *SliceTypeAlias, interfaceName string) st
 	sb.WriteString("}\n\n")
 
 	return sb.String()
+}
+
+// invokeDefc directly calls the defc code generation library to produce the final
+// implementation file (e.g., store_impl.go) from the intermediate file (e.g., store.go).
+func invokeDefc(intermediateFile string, intermediateCode []byte, pkg *Package, opts *GenerateOptions) error {
+	// Determine interface name
+	interfaceName := opts.InterfaceName
+	if interfaceName == "" {
+		iface := findMatchingInterface(pkg)
+		if iface != nil {
+			interfaceName = iface.Name
+		}
+	}
+	if interfaceName == "" {
+		return fmt.Errorf("cannot determine interface name for defc; use -T flag")
+	}
+
+	// Detect interface position in generated file
+	pkgName, _, pos, err := gen.DetectTargetDecl(intermediateFile, intermediateCode, interfaceName)
+	if err != nil {
+		return fmt.Errorf("failed to detect interface %s: %w", interfaceName, err)
+	}
+
+	// Build features list
+	features := buildDefcFeatures(len(pkg.CallbackMethods) > 0, opts.DefcFeatures)
+	var feats []string
+	if features != "" {
+		feats = strings.Split(features, ",")
+	}
+
+	// Invoke defc code generation
+	var buf bytes.Buffer
+	builder := gen.NewCliBuilder(gen.ModeSqlx).
+		WithPkg(pkgName).
+		WithPwd(filepath.Dir(intermediateFile)).
+		WithFile(intermediateFile, intermediateCode).
+		WithPos(pos).
+		WithFeats(feats)
+
+	if err := builder.Build(&buf); err != nil {
+		return fmt.Errorf("defc build failed: %w", err)
+	}
+
+	// Write output file
+	outputPath := filepath.Join(filepath.Dir(intermediateFile), strings.ToLower(interfaceName)+"_impl.go")
+	result, err := imports.Process(outputPath, buf.Bytes(), &imports.Options{
+		Comments:  true,
+		TabIndent: true,
+		TabWidth:  8,
+	})
+	if err != nil {
+		// Fall back to unformatted output
+		result = buf.Bytes()
+	}
+
+	return os.WriteFile(outputPath, result, 0o644)
 }
 
 // buildDefcFeatures merges auto-detected features (sqlx/callback when hasCallback is true)

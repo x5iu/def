@@ -38,7 +38,10 @@ If `-o/--output` is provided, it is treated as a file name relative to each pack
 |--------|-------|-------------|
 | `--output` | `-o` | Output file path (default: `def_gen.go` in package directory) |
 | `--tags` | | Build tags for parsing source files |
+| `--interface` | `-T` | Name of the generated interface |
 | `--defc` | | Custom defc command for `//go:generate` directive (default: `go run -mod=mod github.com/x5iu/defc@latest`) |
+| `--defc-features` | | Additional defc features to include (e.g., `sqlx/rebind,sqlx/in`). Merged with auto-detected features like `sqlx/callback`. |
+| `--defc-generate` | | Directly invoke defc to generate the implementation file, instead of emitting a `//go:generate` directive. When set, `--defc` is ignored. |
 
 **Examples:**
 
@@ -57,6 +60,12 @@ def generate -o query_gen.go --tags def .
 def generate --defc "go tool defc" .
 def generate --defc "go run -mod=mod github.com/x5iu/defc@v0.5.0" .
 def generate --defc /usr/local/bin/defc .
+
+# Specify additional defc features
+def generate --defc-features "sqlx/rebind,sqlx/in" .
+
+# Generate intermediate + implementation in one step (no //go:generate directive)
+def generate --tags def --defc-generate --defc-features "sqlx/rebind,sqlx/in" -o store.go .
 ```
 
 ## Input Format Specification
@@ -93,6 +102,29 @@ type Project struct {
 ```
 
 The `foreign_key` tag specifies which column in the current table is used as the foreign key.
+
+#### Custom Has-Many Field Name (`inverse` tag)
+
+When generating Callback methods, `def` automatically creates has-many relations by looking for a field named `<TypeName>s` on the referenced table (e.g., `ProjectRows` on `User`). If your field has a different name, use the `inverse` tag to specify the actual field name:
+
+```go
+type ModelEndpointRow struct {
+    ID      int64 `db:"id"`
+    ModelID int64 `db:"model_id"`
+
+    // inverse: the has-many field on ModelRow is named "Endpoints", not "ModelEndpointRows"
+    Model *ModelRow `db:"-" foreign_key:"model_id" inverse:"Endpoints"`
+}
+
+type ModelRow struct {
+    ID int64 `db:"id"`
+
+    // This field will be populated by the generated Callback
+    Endpoints []*ModelEndpointRow `db:"-"`
+}
+```
+
+Without `inverse:"Endpoints"`, `def` would look for a field named `ModelEndpointRows` on `ModelRow` and fail to generate the has-many callback.
 
 ### Table Binding
 
@@ -744,8 +776,9 @@ github.com/x5iu/def/
         ├── schema.go         # Struct definition parsing
         ├── parse.go          # def.Init/Query parsing
         ├── analyze.go        # Expression analysis
+        ├── relation.go       # Foreign key relation analysis & Callback generation
         ├── sql.go            # SQL generation
-        └── codegen.go        # Code generation
+        └── codegen.go        # Code generation & defc integration
 ```
 
 ## License

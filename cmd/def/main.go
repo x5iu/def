@@ -32,6 +32,7 @@ expressions to generate SQL statements (SELECT, INSERT, UPDATE, DELETE).`,
 	var interfaceName string
 	var defcCmd string
 	var defcFeatures string
+	var defcGenerate bool
 
 	generateCmd := &cobra.Command{
 		Use:   "generate [patterns...]",
@@ -46,6 +47,8 @@ Examples:
   def generate -o query_gen.go .  Generate to custom output file
   def generate --tags def .       Include files with //go:build def
   def generate --defc "go tool defc" .  Customize defc command
+  def generate --tags def --defc-generate --defc-features "sqlx/rebind,sqlx/in" -o store.go .
+                                        Generate intermediate + implementation in one step
 
 Supported expressions:
   Query (SELECT):
@@ -89,6 +92,7 @@ Supported expressions:
 				InterfaceName: interfaceName,
 				DefcCmd:       defcCmd,
 				DefcFeatures:  defcFeatures,
+				DefcGenerate:  defcGenerate,
 			}
 
 			for _, pattern := range patterns {
@@ -105,6 +109,7 @@ Supported expressions:
 	generateCmd.Flags().StringVarP(&interfaceName, "interface", "T", "", "name of the generated interface")
 	generateCmd.Flags().StringVar(&defcCmd, "defc", "", "defc command for //go:generate directive (e.g., \"go tool defc\", \"defc\", default: \"go run -mod=mod github.com/x5iu/defc@latest\")")
 	generateCmd.Flags().StringVar(&defcFeatures, "defc-features", "", "additional defc features to include in //go:generate directive (e.g., \"sqlx/rebind,sqlx/in\")")
+	generateCmd.Flags().BoolVar(&defcGenerate, "defc-generate", false, "directly invoke defc to generate the implementation file, instead of emitting a //go:generate directive")
 	if err := generateCmd.MarkFlagFilename("output", "go"); err != nil {
 		log.Fatalf("failed to mark flag filename: %v", err)
 	}

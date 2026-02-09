@@ -75,13 +75,13 @@ Expression parsing builds tree structures: `parseFilterExprRecursive()` produces
 - `FilterExpr` — Tree node: `FilterAnd`, `FilterOr`, `FilterComparison`, `FilterIn`
 - `AnalyzedFilter` — SQL-ready filter with subquery detection for foreign keys
 - `TableBinding` — Maps Go struct type to database table name with field/foreign key info
-- `GenerateOptions` — CLI options: Output, Tags, InterfaceName, DefcCmd
+- `GenerateOptions` — CLI options: Output, Tags, InterfaceName, DefcCmd, DefcFeatures, DefcGenerate
 
 ## CLI (`cmd/def/main.go`)
 
 Uses Cobra framework. Main command: `generate` (alias: `gen`).
 
-Flags: `-o` (output file), `--tags` (build tags), `-T/--interface` (interface name), `--defc` (custom defc command for `//go:generate` directive — defaults to `go run -mod=mod github.com/x5iu/defc@latest`).
+Flags: `-o` (output file), `--tags` (build tags), `-T/--interface` (interface name), `--defc` (custom defc command for `//go:generate` directive — defaults to `go run -mod=mod github.com/x5iu/defc@latest`), `--defc-features` (additional defc features to include, e.g. `sqlx/rebind,sqlx/in`), `--defc-generate` (directly invoke defc instead of emitting a `//go:generate` directive).
 
 ## Dialect Support
 
@@ -94,3 +94,11 @@ Flags: `-o` (output file), `--tags` (build tags), `-T/--interface` (interface na
 | `db` | Column mapping (`-` for non-DB fields) | `db:"user_id"` |
 | `primary_key` | Required for subquery/Callback generation | `primary_key:"true"` |
 | `foreign_key` | Defines relationship, references local FK column | `foreign_key:"user_id"` |
+| `inverse` | Custom has-many field name on referenced table (used with `foreign_key`) | `inverse:"Endpoints"` |
+
+## Notable API Functions
+
+- `def.IsNull(field)` / `def.IsNotNull(field)` — Generate `IS NULL` / `IS NOT NULL` conditions in filters. Works with `sql.Null*` types.
+- `def.Count`, `def.Sum`, `def.Avg`, `def.Max`, `def.Min` — Aggregate functions usable in `def.Column` and `def.Filter`. Use generic type parameter (e.g. `def.Count[int64]`) when used in filter comparisons.
+- `def.Func("NAME", args...)` — Custom SQL function calls. Use generic type parameter for filter comparisons. Arguments can be field references, string/number literals, or method parameters.
+- `def.In(field, slice)` — Generates `IN (${slice})` clauses.
