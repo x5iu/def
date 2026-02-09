@@ -27,10 +27,12 @@ func parseStructTags(structType *types.Struct) (fields []FieldInfo, foreignKeys 
 		if dbTag == "-" {
 			// Check if it has a foreign_key tag
 			if fkTag != "" {
+				inverseTag := st.Get("inverse")
 				fk := ForeignKeyInfo{
 					FieldName: field.Name(),
 					KeyColumn: fkTag,
 					RefType:   field.Type(),
+					Inverse:   inverseTag,
 				}
 				foreignKeys = append(foreignKeys, fk)
 			}

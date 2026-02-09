@@ -19,6 +19,7 @@ type ForeignKeyInfo struct {
 	FieldName string     // Go field name, e.g., "User"
 	KeyColumn string     // Foreign key column, e.g., "user_id"
 	RefType   types.Type // Referenced type, e.g., *User
+	Inverse   string     // Custom has-many field name on the referenced table, e.g., "Endpoints"
 }
 
 // TableBinding represents a type bound to a database table.
@@ -247,12 +248,13 @@ type CallbackMethod struct {
 
 // CallbackField represents a field to populate in Callback.
 type CallbackField struct {
-	FieldName    string // e.g., "User"
-	MethodName   string // e.g., "getUserByID"
-	KeyFieldName string // e.g., "UserID"
-	IsSlice      bool   // true for one-to-many
-	CacheKey     string // e.g., "user_id" for building cache key
-	RefTypeName  string // actual Go type name from BindTable (e.g., "User" for field "Author *User")
+	FieldName     string // e.g., "User"
+	MethodName    string // e.g., "getUserByID"
+	KeyFieldName  string // e.g., "UserID"
+	IsSlice       bool   // true for one-to-many
+	CacheKey      string // e.g., "user_id" for building cache key
+	RefTypeName   string // actual Go type name from BindTable (e.g., "User" for field "Author *User")
+	AliasTypeName string // slice type alias name for cache (e.g., "ModelEndpointRows"); only set for has-many
 
 	// For slice fields (has-many), SliceType is the underlying slice type (e.g., "[]*Project").
 	// FieldIsAlias indicates whether the struct field type is the generated alias type (e.g., "Projects").

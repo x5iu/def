@@ -487,7 +487,10 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 	for _, field := range cb.Fields {
 		if field.IsSlice {
 			// One-to-many: check cache then query
-			aliasName := field.FieldName
+			aliasName := field.AliasTypeName
+			if aliasName == "" {
+				aliasName = field.FieldName
+			}
 			sb.WriteString(fmt.Sprintf("\tif cached, ok := getCache[%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); ok {\n",
 				aliasName, field.CacheKey, receiverName, field.KeyFieldName))
 			if field.FieldIsAlias {

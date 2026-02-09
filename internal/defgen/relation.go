@@ -193,8 +193,14 @@ func addHasManyCallbackField(pkg *Package, callbackMap map[string]*CallbackMetho
 		return
 	}
 
-	// Find the plural field name in the referenced table (e.g., Projects in User)
-	pluralFieldName := sourceTable.TypeName + "s"
+	// Find the has-many field name in the referenced table.
+	// Default convention: sourceTable.TypeName + "s" (e.g., "Projects" in User).
+	// Override with fk.Inverse if set (e.g., "Endpoints" instead of "ModelEndpointRows").
+	aliasTypeName := sourceTable.TypeName + "s"
+	pluralFieldName := aliasTypeName
+	if fk.Inverse != "" {
+		pluralFieldName = fk.Inverse
+	}
 
 	// Check if this field exists in the refTable and capture its type
 	var hasManyFieldType types.Type
@@ -218,7 +224,7 @@ func addHasManyCallbackField(pkg *Package, callbackMap map[string]*CallbackMetho
 	sliceType := ""
 	switch t := hasManyFieldType.(type) {
 	case *types.Named:
-		fieldIsAlias = t.Obj().Name() == pluralFieldName
+		fieldIsAlias = t.Obj().Name() == aliasTypeName
 		sliceType = formatType(pkg, t.Underlying())
 	case *types.Slice:
 		fieldIsAlias = false
@@ -254,6 +260,7 @@ func addHasManyCallbackField(pkg *Package, callbackMap map[string]*CallbackMetho
 		KeyFieldName:  idFieldName,
 		IsSlice:       true,
 		CacheKey:      fk.KeyColumn,
+		AliasTypeName: aliasTypeName,
 		SliceType:     sliceType,
 		FieldIsAlias:  fieldIsAlias,
 	})

@@ -717,6 +717,49 @@ func TestGenerateCallbackMethod_BelongsToRefTypeName(t *testing.T) {
 	}
 }
 
+func TestGenerateCallbackMethod_HasManyCustomFieldName(t *testing.T) {
+	// Scenario: has-many field name "Endpoints" differs from alias type "ModelEndpointRows"
+	// e.g., Endpoints []*ModelEndpointRow `db:"-"` with inverse:"Endpoints" on the FK side
+	cb := &CallbackMethod{
+		StructName:     "Model",
+		StructTypeName: "*Model",
+		IDField: &FieldInfo{
+			GoName: "ID",
+			DBName: "id",
+		},
+		Fields: []CallbackField{
+			{
+				FieldName:     "Endpoints",
+				AliasTypeName: "ModelEndpointRows",
+				MethodName:    "getModelEndpointRowsByModelID",
+				KeyFieldName:  "ID",
+				IsSlice:       true,
+				CacheKey:      "model_id",
+				SliceType:     "[]*ModelEndpointRow",
+				FieldIsAlias:  false,
+			},
+		},
+	}
+
+	got := generateCallbackMethod(cb, "Store")
+
+	// Should use alias type name "ModelEndpointRows" for getCache/setCache, not field name "Endpoints"
+	if !strings.Contains(got, "getCache[ModelEndpointRows]") {
+		t.Errorf("should use alias type name in getCache, not field name.\nGot:\n%s", got)
+	}
+	if strings.Contains(got, "getCache[Endpoints]") {
+		t.Errorf("should NOT use field name 'Endpoints' as type in getCache.\nGot:\n%s", got)
+	}
+	// Field access should use the actual field name "Endpoints"
+	if !strings.Contains(got, "m.Endpoints") {
+		t.Errorf("should access field as m.Endpoints.\nGot:\n%s", got)
+	}
+	// setCache should use alias type for conversion: ModelEndpointRows(m.Endpoints)
+	if !strings.Contains(got, "ModelEndpointRows(m.Endpoints)") {
+		t.Errorf("should convert via alias type: ModelEndpointRows(m.Endpoints).\nGot:\n%s", got)
+	}
+}
+
 func TestGenerateReturningClause(t *testing.T) {
 	pkg := &Package{
 		Tables: map[string]*TableBinding{
