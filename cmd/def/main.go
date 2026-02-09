@@ -31,6 +31,7 @@ expressions to generate SQL statements (SELECT, INSERT, UPDATE, DELETE).`,
 	var buildTags string
 	var interfaceName string
 	var defcCmd string
+	var defcFeatures string
 
 	generateCmd := &cobra.Command{
 		Use:   "generate [patterns...]",
@@ -87,6 +88,7 @@ Supported expressions:
 				Tags:          buildTags,
 				InterfaceName: interfaceName,
 				DefcCmd:       defcCmd,
+				DefcFeatures:  defcFeatures,
 			}
 
 			for _, pattern := range patterns {
@@ -102,6 +104,7 @@ Supported expressions:
 	generateCmd.Flags().StringVar(&buildTags, "tags", "", "build tags for parsing source files (e.g., \"def\" to include files with //go:build def)")
 	generateCmd.Flags().StringVarP(&interfaceName, "interface", "T", "", "name of the generated interface")
 	generateCmd.Flags().StringVar(&defcCmd, "defc", "", "defc command for //go:generate directive (e.g., \"go tool defc\", \"defc\", default: \"go run -mod=mod github.com/x5iu/defc@latest\")")
+	generateCmd.Flags().StringVar(&defcFeatures, "defc-features", "", "additional defc features to include in //go:generate directive (e.g., \"sqlx/rebind,sqlx/in\")")
 	if err := generateCmd.MarkFlagFilename("output", "go"); err != nil {
 		log.Fatalf("failed to mark flag filename: %v", err)
 	}

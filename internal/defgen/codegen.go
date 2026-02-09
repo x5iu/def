@@ -24,6 +24,10 @@ type GenerateOptions struct {
 	// Examples: "go tool defc", "go run -mod=mod github.com/x5iu/defc@latest", "/usr/local/bin/defc".
 	// If empty, defaults to "go run -mod=mod github.com/x5iu/defc@latest".
 	DefcCmd string
+	// DefcFeatures specifies additional defc features to include in the generated //go:generate directive.
+	// These are appended to the auto-detected features (e.g., "sqlx/callback").
+	// Example: "sqlx/rebind,sqlx/in".
+	DefcFeatures string
 }
 
 // Generate generates code for packages matching the given pattern.
@@ -161,10 +165,15 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 	if opts != nil && opts.DefcCmd != "" {
 		defcCmd = opts.DefcCmd
 	}
+	var extraFeatures string
+	if opts != nil {
+		extraFeatures = opts.DefcFeatures
+	}
 	defcOutput := strings.ToLower(interfaceInfo.Name) + "_impl.go"
-	if len(pkg.CallbackMethods) > 0 {
-		buf.WriteString(fmt.Sprintf("//go:generate %s generate --features sqlx/callback -T %s -o %s\n\n",
-			defcCmd, interfaceInfo.Name, defcOutput))
+	features := buildDefcFeatures(len(pkg.CallbackMethods) > 0, extraFeatures)
+	if features != "" {
+		buf.WriteString(fmt.Sprintf("//go:generate %s generate --features %s -T %s -o %s\n\n",
+			defcCmd, features, interfaceInfo.Name, defcOutput))
 	} else {
 		buf.WriteString(fmt.Sprintf("//go:generate %s generate -T %s -o %s\n\n",
 			defcCmd, interfaceInfo.Name, defcOutput))
@@ -562,6 +571,20 @@ func generateSliceCallbackMethod(alias *SliceTypeAlias, interfaceName string) st
 	sb.WriteString("}\n\n")
 
 	return sb.String()
+}
+
+// buildDefcFeatures merges auto-detected features (sqlx/callback when hasCallback is true)
+// with user-specified extra features into a comma-separated string for the --features flag.
+// Returns empty string when no features are needed.
+func buildDefcFeatures(hasCallback bool, extra string) string {
+	var parts []string
+	if hasCallback {
+		parts = append(parts, "sqlx/callback")
+	}
+	if extra != "" {
+		parts = append(parts, extra)
+	}
+	return strings.Join(parts, ",")
 }
 
 // generateBuildConstraint generates a negated build constraint from tags.

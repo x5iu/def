@@ -717,6 +717,28 @@ func TestGenerateCallbackMethod_BelongsToRefTypeName(t *testing.T) {
 	}
 }
 
+func TestBuildDefcFeatures(t *testing.T) {
+	tests := []struct {
+		name        string
+		hasCallback bool
+		extra       string
+		want        string
+	}{
+		{"callback only", true, "", "sqlx/callback"},
+		{"callback with extra", true, "sqlx/rebind,sqlx/in", "sqlx/callback,sqlx/rebind,sqlx/in"},
+		{"extra only", false, "sqlx/rebind,sqlx/in", "sqlx/rebind,sqlx/in"},
+		{"nothing", false, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildDefcFeatures(tt.hasCallback, tt.extra)
+			if got != tt.want {
+				t.Errorf("buildDefcFeatures(%v, %q) = %q, want %q", tt.hasCallback, tt.extra, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGenerateCallbackMethod_HasManyCustomFieldName(t *testing.T) {
 	// Scenario: has-many field name "Endpoints" differs from alias type "ModelEndpointRows"
 	// e.g., Endpoints []*ModelEndpointRow `db:"-"` with inverse:"Endpoints" on the FK side
