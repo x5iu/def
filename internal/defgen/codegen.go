@@ -517,7 +517,7 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 			sb.WriteString("\t}\n\n")
 		} else {
 			// Many-to-one: check cache then query
-			refTypeName := strings.TrimPrefix(field.FieldName, "*")
+			refTypeName := field.RefTypeName
 			sb.WriteString(fmt.Sprintf("\tif cached, ok := getCache[*%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); ok {\n",
 				refTypeName, field.CacheKey, receiverName, field.KeyFieldName))
 			sb.WriteString(fmt.Sprintf("\t\t%s.%s = cached\n", receiverName, field.FieldName))

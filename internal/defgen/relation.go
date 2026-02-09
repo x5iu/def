@@ -175,6 +175,7 @@ func addCallbackField(callbackMap map[string]*CallbackMethod, table *TableBindin
 		KeyFieldName: keyFieldName,
 		IsSlice:      false,
 		CacheKey:     fk.KeyColumn,
+		RefTypeName:  belongsTo.RefTypeName,
 	})
 }
 

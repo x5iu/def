@@ -252,6 +252,7 @@ type CallbackField struct {
 	KeyFieldName string // e.g., "UserID"
 	IsSlice      bool   // true for one-to-many
 	CacheKey     string // e.g., "user_id" for building cache key
+	RefTypeName  string // actual Go type name from BindTable (e.g., "User" for field "Author *User")
 
 	// For slice fields (has-many), SliceType is the underlying slice type (e.g., "[]*Project").
 	// FieldIsAlias indicates whether the struct field type is the generated alias type (e.g., "Projects").

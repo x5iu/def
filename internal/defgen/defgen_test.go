@@ -2,6 +2,7 @@ package defgen
 
 import (
 	"go/token"
+	"strings"
 	"testing"
 )
 
@@ -677,6 +678,43 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestGenerateCallbackMethod_BelongsToRefTypeName(t *testing.T) {
+	// Scenario: struct field name "Author" differs from type name "User"
+	// e.g., Author *User `db:"-" foreign_key:"author_id"`
+	cb := &CallbackMethod{
+		StructName:     "Project",
+		StructTypeName: "*Project",
+		IDField: &FieldInfo{
+			GoName: "ID",
+			DBName: "id",
+		},
+		Fields: []CallbackField{
+			{
+				FieldName:    "Author",
+				RefTypeName:  "User",
+				MethodName:   "getUserByID",
+				KeyFieldName: "AuthorID",
+				IsSlice:      false,
+				CacheKey:     "author_id",
+			},
+		},
+	}
+
+	got := generateCallbackMethod(cb, "Querier")
+
+	// Should use *User (actual type) not *Author (field name) in getCache/setCache
+	if strings.Contains(got, "*Author") {
+		t.Errorf("generateCallbackMethod() should use type name 'User', not field name 'Author'.\nGot:\n%s", got)
+	}
+	if !strings.Contains(got, "getCache[*User]") {
+		t.Errorf("generateCallbackMethod() should contain getCache[*User].\nGot:\n%s", got)
+	}
+	// Field access should still use the field name "Author"
+	if !strings.Contains(got, "p.Author") {
+		t.Errorf("generateCallbackMethod() should access field as p.Author.\nGot:\n%s", got)
+	}
 }
 
 func TestGenerateReturningClause(t *testing.T) {
