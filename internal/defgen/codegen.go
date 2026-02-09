@@ -613,6 +613,11 @@ func invokeDefc(intermediateFile string, intermediateCode []byte, pkg *Package, 
 	if features != "" {
 		feats = strings.Split(features, ",")
 	}
+	// Align invokeDefc with defc CLI default behavior (since defc v1.37.0),
+	// where sqlx/future is enabled unless defc itself is built with `legacy`.
+	if !containsFeature(feats, "sqlx/future") {
+		feats = append(feats, "sqlx/future")
+	}
 
 	// Invoke defc code generation
 	var buf bytes.Buffer
@@ -654,6 +659,15 @@ func buildDefcFeatures(hasCallback bool, extra string) string {
 		parts = append(parts, extra)
 	}
 	return strings.Join(parts, ",")
+}
+
+func containsFeature(features []string, target string) bool {
+	for _, feature := range features {
+		if strings.TrimSpace(feature) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // generateBuildConstraint generates a negated build constraint from tags.

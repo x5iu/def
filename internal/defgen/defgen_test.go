@@ -2,14 +2,13 @@ package defgen
 
 import (
 	"bytes"
+	"fmt"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/x5iu/defc/gen"
-	"golang.org/x/tools/imports"
 )
 
 func TestTokenToSQLOp(t *testing.T) {
@@ -1159,7 +1158,7 @@ type Store interface {
 }
 `
 
-	// Write to temp file
+	// Write intermediate file
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "store.go")
 	if err := os.WriteFile(filePath, []byte(intermediateSource), 0o644); err != nil {
@@ -1167,40 +1166,28 @@ type Store interface {
 	}
 
 	interfaceName := "Store"
-	feats := []string{"sqlx/rebind", "sqlx/in"}
+	featureList := "sqlx/rebind,sqlx/in"
 
-	// Path A: direct defc API call
-	pkgName, _, pos, err := gen.DetectTargetDecl(filePath, []byte(intermediateSource), interfaceName)
+	// Path A: run defc CLI command
+	defcCmd := strings.TrimSpace(os.Getenv("DEFC_TEST_CMD"))
+	if defcCmd == "" {
+		defcCmd = "go run -mod=mod github.com/x5iu/defc@latest"
+	}
+	if err := runDefcGenerate(defcCmd, dir, interfaceName, featureList, "store.go", "store_impl_cli.go"); err != nil {
+		t.Fatalf("defc CLI generate failed: %v", err)
+	}
+	resultA, err := os.ReadFile(filepath.Join(dir, "store_impl_cli.go"))
 	if err != nil {
-		t.Fatalf("DetectTargetDecl failed: %v", err)
+		t.Fatalf("failed to read defc CLI output: %v", err)
 	}
 
-	var bufA bytes.Buffer
-	builder := gen.NewCliBuilder(gen.ModeSqlx).
-		WithPkg(pkgName).
-		WithPwd(dir).
-		WithFile(filePath, []byte(intermediateSource)).
-		WithPos(pos).
-		WithFeats(feats)
-	if err := builder.Build(&bufA); err != nil {
-		t.Fatalf("direct defc Build failed: %v", err)
-	}
-
-	outputPathA := filepath.Join(dir, "store_impl_a.go")
-	resultA, err := imports.Process(outputPathA, bufA.Bytes(), &imports.Options{
-		Comments: true, TabIndent: true, TabWidth: 8,
-	})
-	if err != nil {
-		resultA = bufA.Bytes()
-	}
-
-	// Path B: invokeDefc
+	// Path B: invokeDefc (code generation path used by --defc-generate)
 	pkg := &Package{
 		CallbackMethods: nil, // no callbacks in this test
 	}
 	opts := &GenerateOptions{
 		InterfaceName: interfaceName,
-		DefcFeatures:  "sqlx/rebind,sqlx/in",
+		DefcFeatures:  featureList,
 		DefcGenerate:  true,
 	}
 	if err := invokeDefc(filePath, []byte(intermediateSource), pkg, opts); err != nil {
@@ -1214,7 +1201,39 @@ type Store interface {
 
 	// Compare
 	if !bytes.Equal(resultA, resultB) {
-		t.Errorf("invokeDefc output differs from direct defc API output.\n--- Direct ---\n%s\n--- invokeDefc ---\n%s",
+		t.Errorf("invokeDefc output differs from defc CLI output.\n--- defc CLI ---\n%s\n--- invokeDefc ---\n%s",
 			string(resultA), string(resultB))
 	}
+}
+
+func runDefcGenerate(defcCmd, dir, interfaceName, features, inputFile, outputFile string) error {
+	cmdParts := strings.Fields(defcCmd)
+	if len(cmdParts) == 0 {
+		return fmt.Errorf("empty defc command")
+	}
+
+	args := append([]string{}, cmdParts[1:]...)
+	args = append(args, "generate")
+	if features != "" {
+		args = append(args, "--features", features)
+	}
+	args = append(args, "-T", interfaceName, "-o", outputFile, inputFile)
+
+	cmd := exec.Command(cmdParts[0], args...)
+	cmd.Dir = dir
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run command %q failed: %w\nstdout:\n%s\nstderr:\n%s",
+			strings.Join(append([]string{cmdParts[0]}, args...), " "),
+			err,
+			stdout.String(),
+			stderr.String())
+	}
+
+	return nil
 }
