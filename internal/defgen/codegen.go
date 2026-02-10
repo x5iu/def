@@ -299,6 +299,7 @@ func collectImports(pkg *Package) []string {
 
 	// Add fmt and reflect if we have callback methods (for cache utilities)
 	if len(pkg.CallbackMethods) > 0 {
+		imports["errors"] = true
 		imports["fmt"] = true
 		imports["reflect"] = true
 	}
@@ -424,6 +425,8 @@ type callbackCache map[string]any
 
 type callbackCacheKey struct{}
 
+var ErrCallbackCacheRequired = errors.New("callback requires WithCache context; see WithCache()")
+
 // WithCache creates a new context with an empty cache for Callback methods.
 func WithCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, callbackCacheKey{}, make(callbackCache))
@@ -438,17 +441,17 @@ func setCache[T any](ctx context.Context, identifier string, value T) {
 	cachemap[cachekey] = value
 }
 
-func getCache[T any](ctx context.Context, identifier string) (v T, ok bool) {
-	cachemap, ok := ctx.Value(callbackCacheKey{}).(callbackCache)
-	if !ok {
-		return v, false
+func requireCache[T any](ctx context.Context, identifier string) (v T, ok bool, err error) {
+	cachemap, cacheOK := ctx.Value(callbackCacheKey{}).(callbackCache)
+	if !cacheOK {
+		return v, false, ErrCallbackCacheRequired
 	}
 	cachekey := fmt.Sprintf("%s:%s", reflect.TypeFor[T]().String(), identifier)
-	value, ok := cachemap[cachekey]
-	if !ok {
-		return v, false
+	value, found := cachemap[cachekey]
+	if !found {
+		return v, false, nil
 	}
-	return value.(T), true
+	return value.(T), true, nil
 }
 
 `
@@ -499,6 +502,11 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 	sb.WriteString(fmt.Sprintf("func (%s %s) Callback(ctx context.Context, q %s) error {\n",
 		receiverName, cb.StructTypeName, interfaceName))
 
+	// Fail fast when callback cache context is missing.
+	sb.WriteString("\tif _, ok := ctx.Value(callbackCacheKey{}).(callbackCache); !ok {\n")
+	sb.WriteString("\t\treturn ErrCallbackCacheRequired\n")
+	sb.WriteString("\t}\n\n")
+
 	// Cache self first to prevent circular references
 	if cb.IDField != nil {
 		sb.WriteString(fmt.Sprintf("\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s)\n\n",
@@ -513,8 +521,10 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 			if aliasName == "" {
 				aliasName = field.FieldName
 			}
-			sb.WriteString(fmt.Sprintf("\tif cached, ok := getCache[%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); ok {\n",
+			sb.WriteString(fmt.Sprintf("\tif cached, ok, err := requireCache[%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); err != nil {\n",
 				aliasName, field.CacheKey, receiverName, field.KeyFieldName))
+			sb.WriteString("\t\treturn err\n")
+			sb.WriteString("\t} else if ok {\n")
 			if field.FieldIsAlias {
 				sb.WriteString(fmt.Sprintf("\t\t%s.%s = cached\n", receiverName, field.FieldName))
 			} else {
@@ -543,8 +553,10 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 		} else {
 			// Many-to-one: check cache then query
 			refTypeName := field.RefTypeName
-			sb.WriteString(fmt.Sprintf("\tif cached, ok := getCache[*%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); ok {\n",
+			sb.WriteString(fmt.Sprintf("\tif cached, ok, err := requireCache[*%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); err != nil {\n",
 				refTypeName, field.CacheKey, receiverName, field.KeyFieldName))
+			sb.WriteString("\t\treturn err\n")
+			sb.WriteString("\t} else if ok {\n")
 			sb.WriteString(fmt.Sprintf("\t\t%s.%s = cached\n", receiverName, field.FieldName))
 			sb.WriteString("\t} else {\n")
 			sb.WriteString("\t\tvar err error\n")

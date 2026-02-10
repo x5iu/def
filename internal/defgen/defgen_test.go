@@ -709,12 +709,12 @@ func TestGenerateCallbackMethod_BelongsToRefTypeName(t *testing.T) {
 
 	got := generateCallbackMethod(cb, "Querier")
 
-	// Should use *User (actual type) not *Author (field name) in getCache/setCache
+	// Should use *User (actual type) not *Author (field name) in requireCache/setCache
 	if strings.Contains(got, "*Author") {
 		t.Errorf("generateCallbackMethod() should use type name 'User', not field name 'Author'.\nGot:\n%s", got)
 	}
-	if !strings.Contains(got, "getCache[*User]") {
-		t.Errorf("generateCallbackMethod() should contain getCache[*User].\nGot:\n%s", got)
+	if !strings.Contains(got, "requireCache[*User]") {
+		t.Errorf("generateCallbackMethod() should contain requireCache[*User].\nGot:\n%s", got)
 	}
 	// Field access should still use the field name "Author"
 	if !strings.Contains(got, "p.Author") {
@@ -770,12 +770,12 @@ func TestGenerateCallbackMethod_HasManyCustomFieldName(t *testing.T) {
 
 	got := generateCallbackMethod(cb, "Store")
 
-	// Should use alias type name "ModelEndpointRows" for getCache/setCache, not field name "Endpoints"
-	if !strings.Contains(got, "getCache[ModelEndpointRows]") {
-		t.Errorf("should use alias type name in getCache, not field name.\nGot:\n%s", got)
+	// Should use alias type name "ModelEndpointRows" for requireCache/setCache, not field name "Endpoints"
+	if !strings.Contains(got, "requireCache[ModelEndpointRows]") {
+		t.Errorf("should use alias type name in requireCache, not field name.\nGot:\n%s", got)
 	}
-	if strings.Contains(got, "getCache[Endpoints]") {
-		t.Errorf("should NOT use field name 'Endpoints' as type in getCache.\nGot:\n%s", got)
+	if strings.Contains(got, "requireCache[Endpoints]") {
+		t.Errorf("should NOT use field name 'Endpoints' as type in requireCache.\nGot:\n%s", got)
 	}
 	// Field access should use the actual field name "Endpoints"
 	if !strings.Contains(got, "m.Endpoints") {
@@ -784,6 +784,57 @@ func TestGenerateCallbackMethod_HasManyCustomFieldName(t *testing.T) {
 	// setCache should use alias type for conversion: ModelEndpointRows(m.Endpoints)
 	if !strings.Contains(got, "ModelEndpointRows(m.Endpoints)") {
 		t.Errorf("should convert via alias type: ModelEndpointRows(m.Endpoints).\nGot:\n%s", got)
+	}
+}
+
+func TestCallbackWithoutCache_ReturnsError(t *testing.T) {
+	pkg := &Package{
+		PkgName: "testpkg",
+		CallbackMethods: []*CallbackMethod{
+			{
+				StructName:     "Project",
+				StructTypeName: "*Project",
+				IDField: &FieldInfo{
+					GoName: "ID",
+					DBName: "id",
+				},
+				Fields: []CallbackField{
+					{
+						FieldName:    "Author",
+						RefTypeName:  "User",
+						MethodName:   "getUserByID",
+						KeyFieldName: "AuthorID",
+						CacheKey:     "author_id",
+					},
+				},
+			},
+		},
+	}
+
+	gotBytes, err := generateCode(pkg, &GenerateOptions{InterfaceName: "Store"})
+	if err != nil {
+		t.Fatalf("generateCode() error = %v", err)
+	}
+
+	got := string(gotBytes)
+
+	if !strings.Contains(got, "var ErrCallbackCacheRequired = errors.New(\"callback requires WithCache context; see WithCache()\")") {
+		t.Fatalf("generated code should define ErrCallbackCacheRequired sentinel error.\nGot:\n%s", got)
+	}
+	if !strings.Contains(got, "if cached, ok, err := requireCache[*User]") {
+		t.Fatalf("generated Callback should call requireCache and handle missing cache.\nGot:\n%s", got)
+	}
+	if !strings.Contains(got, "if _, ok := ctx.Value(callbackCacheKey{}).(callbackCache); !ok {") {
+		t.Fatalf("generated Callback should fail fast at method start when cache context is missing.\nGot:\n%s", got)
+	}
+	if !strings.Contains(got, "return ErrCallbackCacheRequired") {
+		t.Fatalf("generated Callback should return ErrCallbackCacheRequired when cache context is missing.\nGot:\n%s", got)
+	}
+	if !strings.Contains(got, "return v, false, ErrCallbackCacheRequired") {
+		t.Fatalf("generated requireCache should fail fast when WithCache context is missing.\nGot:\n%s", got)
+	}
+	if !strings.Contains(got, "\"errors\"") {
+		t.Fatalf("generated imports should include errors for sentinel error.\nGot:\n%s", got)
 	}
 }
 
