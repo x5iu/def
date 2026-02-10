@@ -136,27 +136,37 @@ func parseTableBindings(pkg *Package, structs map[string]*structInfo) error {
 					continue
 				}
 
+				typeInfo := pkg.TypesInfo.TypeOf(typeExpr)
+				if typeInfo == nil {
+					continue
+				}
+				typeKey := getTypeKey(typeInfo)
+				if typeKey == "" {
+					continue
+				}
+
+				resolvedTypeName := getTypeName(typeInfo)
+				if resolvedTypeName == "" {
+					resolvedTypeName = typeName
+				}
+
 				// Try to find struct info from local structs map first
-				si, ok := structs[typeName]
+				si, ok := structs[typeKey]
 				if !ok {
 					// For external package types, get type info via TypesInfo
-					typeInfo := pkg.TypesInfo.TypeOf(typeExpr)
-					if typeInfo == nil {
-						continue
-					}
 					// Dynamically build structInfo from the type
 					si = getStructInfoFromType(typeInfo)
 					if si == nil {
 						continue
 					}
 					// Cache for later use (e.g., in parseFieldPath)
-					structs[typeName] = si
+					structs[typeKey] = si
 				}
 
 				// Create table binding
 				binding := &TableBinding{
 					Type:        si.typ,
-					TypeName:    typeName,
+					TypeName:    resolvedTypeName,
 					TableName:   tableName,
 					Fields:      si.fields,
 					ForeignKeys: si.foreignKeys,
@@ -170,7 +180,7 @@ func parseTableBindings(pkg *Package, structs map[string]*structInfo) error {
 					}
 				}
 
-				pkg.Tables[typeName] = binding
+				pkg.Tables[typeKey] = binding
 			}
 
 			return true
@@ -375,11 +385,19 @@ func parseQueryMethod(pkg *Package, fn *ast.FuncDecl, queryCall *ast.CallExpr, s
 	if fn.Type.Params != nil {
 		for _, param := range fn.Type.Params.List {
 			paramType := pkg.TypesInfo.TypeOf(param.Type)
+			if len(param.Names) == 0 {
+				method.ParamTypes = append(method.ParamTypes, paramType)
+				continue
+			}
 			// Skip context.Context
 			if isContextType(paramType) {
+				for range param.Names {
+					method.ParamTypes = append(method.ParamTypes, paramType)
+				}
 				continue
 			}
 			for _, name := range param.Names {
+				method.ParamTypes = append(method.ParamTypes, paramType)
 				method.Params = append(method.Params, ParamInfo{
 					Name: name.Name,
 					Type: paramType,
@@ -393,6 +411,16 @@ func parseQueryMethod(pkg *Package, fn *ast.FuncDecl, queryCall *ast.CallExpr, s
 		firstResult := fn.Type.Results.List[0]
 		resultType := pkg.TypesInfo.TypeOf(firstResult.Type)
 		method.ReturnType = analyzeReturnType(resultType)
+		for _, result := range fn.Type.Results.List {
+			resultType := pkg.TypesInfo.TypeOf(result.Type)
+			if len(result.Names) == 0 {
+				method.ResultTypes = append(method.ResultTypes, resultType)
+				continue
+			}
+			for range result.Names {
+				method.ResultTypes = append(method.ResultTypes, resultType)
+			}
+		}
 	}
 
 	// Parse columns, filters, limit, and offset from def.Query call
@@ -903,14 +931,14 @@ done:
 	if len(path) >= 2 {
 		// Get the type of the first variable
 		firstElem := path[0]
-		typeName := getTypeName(firstElem.Type)
+		typeKey := getTypeKey(firstElem.Type)
 
-		si, ok := structs[typeName]
+		si, ok := structs[typeKey]
 		if !ok {
 			// Try to dynamically build structInfo for external package types
 			si = getStructInfoFromType(firstElem.Type)
 			if si != nil {
-				structs[typeName] = si // Cache for later use
+				structs[typeKey] = si // Cache for later use
 			}
 		}
 		if si != nil {
@@ -926,13 +954,13 @@ done:
 					path[i].Type = fk.RefType
 
 					// Get the struct for the referenced type
-					refTypeName := getTypeName(fk.RefType)
-					refStruct, ok := structs[refTypeName]
+					refTypeKey := getTypeKey(fk.RefType)
+					refStruct, ok := structs[refTypeKey]
 					if !ok {
 						// Try to dynamically build structInfo for external package types
 						refStruct = getStructInfoFromType(fk.RefType)
 						if refStruct != nil {
-							structs[refTypeName] = refStruct
+							structs[refTypeKey] = refStruct
 						}
 					}
 					if refStruct != nil {
@@ -1037,11 +1065,19 @@ func parseMutationMethod(pkg *Package, fn *ast.FuncDecl, kind MethodKind, mutati
 	if fn.Type.Params != nil {
 		for _, param := range fn.Type.Params.List {
 			paramType := pkg.TypesInfo.TypeOf(param.Type)
+			if len(param.Names) == 0 {
+				method.ParamTypes = append(method.ParamTypes, paramType)
+				continue
+			}
 			// Skip context.Context
 			if isContextType(paramType) {
+				for range param.Names {
+					method.ParamTypes = append(method.ParamTypes, paramType)
+				}
 				continue
 			}
 			for _, name := range param.Names {
+				method.ParamTypes = append(method.ParamTypes, paramType)
 				method.Params = append(method.Params, ParamInfo{
 					Name: name.Name,
 					Type: paramType,
@@ -1055,6 +1091,16 @@ func parseMutationMethod(pkg *Package, fn *ast.FuncDecl, kind MethodKind, mutati
 		firstResult := fn.Type.Results.List[0]
 		resultType := pkg.TypesInfo.TypeOf(firstResult.Type)
 		method.ReturnType = analyzeMutationReturnType(resultType)
+		for _, result := range fn.Type.Results.List {
+			resultType := pkg.TypesInfo.TypeOf(result.Type)
+			if len(result.Names) == 0 {
+				method.ResultTypes = append(method.ResultTypes, resultType)
+				continue
+			}
+			for range result.Names {
+				method.ResultTypes = append(method.ResultTypes, resultType)
+			}
+		}
 	}
 
 	// Parse mutation-specific arguments
@@ -1136,7 +1182,7 @@ func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 
 			// Determine target type from the first Set's field path
 			if targetType == "" && len(setExpr.FieldPath) > 0 {
-				targetType = getTypeName(setExpr.FieldPath[0].Type)
+				targetType = getTypeKey(setExpr.FieldPath[0].Type)
 			}
 
 			sets = append(sets, setExpr)
@@ -1169,7 +1215,7 @@ func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 	// Find the parameter
 	for i := range params {
 		if params[i].Name == ident.Name {
-			targetType := getTypeName(params[i].Type)
+			targetType := getTypeKey(params[i].Type)
 			return targetType, nil, &params[i], returningCols, nil
 		}
 	}
@@ -1192,7 +1238,7 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 		// Check if this identifier is a method parameter (entity mode)
 		for i := range params {
 			if params[i].Name == ident.Name {
-				targetType := getTypeName(params[i].Type)
+				targetType := getTypeKey(params[i].Type)
 
 				// Parse remaining arguments for Filter and Returning expressions
 				var filters []*FilterExpr
@@ -1222,6 +1268,10 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 						}
 						filters = append(filters, filter)
 					}
+				}
+
+				if len(filters) == 0 {
+					return "", nil, nil, nil, nil, fmt.Errorf("def.Update requires at least one Filter expression")
 				}
 
 				return targetType, nil, filters, &params[i], returningCols, nil
@@ -1258,7 +1308,7 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 
 			// Determine target type from the first Set's field path
 			if targetType == "" && len(setExpr.FieldPath) > 0 {
-				targetType = getTypeName(setExpr.FieldPath[0].Type)
+				targetType = getTypeKey(setExpr.FieldPath[0].Type)
 			}
 
 			sets = append(sets, setExpr)
@@ -1279,6 +1329,9 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 
 	if len(sets) == 0 {
 		return "", nil, nil, nil, nil, fmt.Errorf("def.Update requires at least one Set expression")
+	}
+	if len(filters) == 0 {
+		return "", nil, nil, nil, nil, fmt.Errorf("def.Update requires at least one Filter expression")
 	}
 
 	return targetType, sets, filters, nil, returningCols, nil
@@ -1317,8 +1370,8 @@ func parseDeleteArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 			}
 
 			// Determine target type from filter's field path
-			if targetType == "" && filter.Kind == FilterComparison && filter.Left.IsField && len(filter.Left.FieldPath) > 0 {
-				targetType = getTypeName(filter.Left.FieldPath[0].Type)
+			if targetType == "" && filter.Left.IsField && len(filter.Left.FieldPath) > 0 {
+				targetType = getTypeKey(filter.Left.FieldPath[0].Type)
 			}
 
 			filters = append(filters, filter)

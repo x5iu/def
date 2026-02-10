@@ -13,6 +13,14 @@ func main() {
 	log.SetPrefix("def: ")
 	log.SetOutput(os.Stderr)
 
+	rootCmd := newRootCommand()
+	if err := rootCmd.Execute(); err != nil {
+		log.Printf("%v", err)
+		os.Exit(1)
+	}
+}
+
+func newRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "def",
 		Short: "SQL query code generator for Go",
@@ -116,7 +124,5 @@ Supported expressions:
 
 	rootCmd.AddCommand(generateCmd)
 
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
-	}
+	return rootCmd
 }

@@ -7,6 +7,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/x5iu/defc/gen"
@@ -164,7 +165,11 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 		}
 	} else {
 		// Find the interface that matches our methods
-		interfaceInfo = findMatchingInterface(pkg)
+		matched, matchErr := findMatchingInterface(pkg)
+		if matchErr != nil {
+			return nil, matchErr
+		}
+		interfaceInfo = matched
 		if interfaceInfo == nil {
 			// No matching interface found, return error
 			return nil, fmt.Errorf("no matching interface found for methods; use -T to specify interface name")
@@ -308,42 +313,154 @@ func collectImports(pkg *Package) []string {
 	for imp := range imports {
 		result = append(result, imp)
 	}
+	sort.Strings(result)
 	return result
 }
 
-// findMatchingInterface finds an interface that matches the generated methods.
-func findMatchingInterface(pkg *Package) *InterfaceInfo {
-	// Create a set of method names
-	methodNames := make(map[string]bool)
-	for _, m := range pkg.Methods {
-		methodNames[m.Name] = true
+type methodShape struct {
+	paramTypes  []string
+	resultTypes []string
+}
+
+// findMatchingInterface finds an interface that exactly matches generated method signatures.
+// It returns an error if multiple interfaces match with equal priority.
+func findMatchingInterface(pkg *Package) (*InterfaceInfo, error) {
+	expected, err := buildExpectedMethodShapes(pkg)
+	if err != nil {
+		return nil, err
 	}
-	for _, m := range pkg.MutationMethods {
-		methodNames[m.Name] = true
+	if len(expected) == 0 {
+		return nil, nil
 	}
 
-	// Find an interface that has all these methods
-	for _, iface := range pkg.Interfaces {
-		hasAll := true
-		for name := range methodNames {
-			found := false
-			for _, m := range iface.Methods {
-				if m.Name == name {
-					found = true
-					break
-				}
-			}
-			if !found {
-				hasAll = false
-				break
-			}
+	interfaceNames := make([]string, 0, len(pkg.Interfaces))
+	for name := range pkg.Interfaces {
+		interfaceNames = append(interfaceNames, name)
+	}
+	sort.Strings(interfaceNames)
+
+	var exactMatches []*InterfaceInfo
+	var supersetMatches []*InterfaceInfo
+
+	for _, name := range interfaceNames {
+		iface := pkg.Interfaces[name]
+		if !interfaceMatchesExpected(iface, expected) {
+			continue
 		}
-		if hasAll && len(iface.Methods) > 0 {
-			return iface
+		if len(iface.Methods) == len(expected) {
+			exactMatches = append(exactMatches, iface)
+		} else {
+			supersetMatches = append(supersetMatches, iface)
 		}
 	}
 
-	return nil
+	switch {
+	case len(exactMatches) == 1:
+		return exactMatches[0], nil
+	case len(exactMatches) > 1:
+		return nil, fmt.Errorf("multiple exact matching interfaces found: %s; use -T to choose one", joinInterfaceNames(exactMatches))
+	case len(supersetMatches) == 1:
+		return supersetMatches[0], nil
+	case len(supersetMatches) > 1:
+		return nil, fmt.Errorf("multiple matching interfaces found: %s; use -T to choose one", joinInterfaceNames(supersetMatches))
+	default:
+		return nil, nil
+	}
+}
+
+func buildExpectedMethodShapes(pkg *Package) (map[string]methodShape, error) {
+	expected := make(map[string]methodShape, len(pkg.Methods)+len(pkg.MutationMethods))
+
+	for _, method := range pkg.Methods {
+		shape := methodShape{
+			paramTypes:  typeSliceForMatch(method.ParamTypes),
+			resultTypes: typeSliceForMatch(method.ResultTypes),
+		}
+		if existing, ok := expected[method.Name]; ok && !methodShapeEqual(existing, shape) {
+			return nil, fmt.Errorf("conflicting query method signatures detected for %s", method.Name)
+		}
+		expected[method.Name] = shape
+	}
+
+	for _, method := range pkg.MutationMethods {
+		shape := methodShape{
+			paramTypes:  typeSliceForMatch(method.ParamTypes),
+			resultTypes: typeSliceForMatch(method.ResultTypes),
+		}
+		if existing, ok := expected[method.Name]; ok && !methodShapeEqual(existing, shape) {
+			return nil, fmt.Errorf("conflicting mutation method signatures detected for %s", method.Name)
+		}
+		expected[method.Name] = shape
+	}
+
+	return expected, nil
+}
+
+func interfaceMatchesExpected(iface *InterfaceInfo, expected map[string]methodShape) bool {
+	interfaceMethods := make(map[string]methodShape, len(iface.Methods))
+	for _, method := range iface.Methods {
+		interfaceMethods[method.Name] = methodShape{
+			paramTypes:  typeSliceForMatch(method.ParamTypes),
+			resultTypes: typeSliceForMatch(method.ResultTypes),
+		}
+	}
+
+	for name, expectedShape := range expected {
+		actual, ok := interfaceMethods[name]
+		if !ok {
+			return false
+		}
+		if !methodShapeEqual(actual, expectedShape) {
+			return false
+		}
+	}
+	return true
+}
+
+func methodShapeEqual(a, b methodShape) bool {
+	if len(a.paramTypes) != len(b.paramTypes) || len(a.resultTypes) != len(b.resultTypes) {
+		return false
+	}
+	for i := range a.paramTypes {
+		if a.paramTypes[i] != b.paramTypes[i] {
+			return false
+		}
+	}
+	for i := range a.resultTypes {
+		if a.resultTypes[i] != b.resultTypes[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func typeSliceForMatch(ts []types.Type) []string {
+	result := make([]string, 0, len(ts))
+	for _, t := range ts {
+		result = append(result, typeForMatch(t))
+	}
+	return result
+}
+
+func typeForMatch(t types.Type) string {
+	if t == nil {
+		return "<nil>"
+	}
+	return types.TypeString(t, func(p *types.Package) string {
+		if p == nil {
+			return ""
+		}
+		return p.Path()
+	})
+}
+
+func joinInterfaceNames(ifaces []*InterfaceInfo) string {
+	names := make([]string, 0, len(ifaces))
+	for _, iface := range ifaces {
+		names = append(names, iface.Name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // generateMethodSignature generates a method signature string.
@@ -604,7 +721,10 @@ func invokeDefc(intermediateFile string, intermediateCode []byte, pkg *Package, 
 	// Determine interface name
 	interfaceName := opts.InterfaceName
 	if interfaceName == "" {
-		iface := findMatchingInterface(pkg)
+		iface, err := findMatchingInterface(pkg)
+		if err != nil {
+			return err
+		}
 		if iface != nil {
 			interfaceName = iface.Name
 		}

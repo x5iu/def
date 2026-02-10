@@ -93,7 +93,7 @@ func AnalyzeFilter(pkg *Package, filter *FilterExpr) (*AnalyzedFilter, error) {
 		return analyzeLeafFilter(pkg, filter, false)
 
 	default:
-		return nil, nil
+		return nil, fmt.Errorf("unsupported filter kind: %v", filter.Kind)
 	}
 }
 
@@ -117,7 +117,7 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 	} else if filter.Left.IsField {
 		path := filter.Left.FieldPath
 		if len(path) < 2 {
-			return nil, nil // Invalid path
+			return nil, fmt.Errorf("invalid field path in filter: expected at least 2 elements, got %d", len(path))
 		}
 
 		// Check if any element in the path is a foreign key
@@ -134,37 +134,46 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 			analyzed.IsSubquery = true
 
 			// Get the foreign key column
-			varTypeName := getTypeName(path[0].Type)
-			binding, ok := pkg.Tables[varTypeName]
-			if !ok {
-				return nil, nil
+			binding, err := lookupTableByType(pkg, path[0].Type)
+			if err != nil {
+				return nil, err
 			}
 
 			// Find the foreign key info
+			fkMatched := false
 			for _, fk := range binding.ForeignKeys {
 				if fk.FieldName == path[fkIndex].FieldName {
+					fkMatched = true
 					analyzed.ForeignKeyCol = fk.KeyColumn
 
 					// Get the referenced type's table
-					refTypeName := getTypeName(fk.RefType)
-					refBinding, ok := pkg.Tables[refTypeName]
-					if ok && refBinding.PrimaryKey != nil {
-						analyzed.SubqueryTable = refBinding.TableName
-						analyzed.SubqueryIDField = refBinding.PrimaryKey.DBName
+					refBinding, err := lookupTableByType(pkg, fk.RefType)
+					if err != nil {
+						return nil, err
+					}
+					if refBinding.PrimaryKey == nil {
+						return nil, fmt.Errorf("referenced table %s has no primary key", refBinding.TableName)
+					}
 
-						// Get the field column name from the last element
-						if fkIndex+1 < len(path) {
-							lastFieldName := path[len(path)-1].FieldName
-							for _, f := range refBinding.Fields {
-								if f.GoName == lastFieldName {
-									analyzed.SubqueryColumn = f.DBName
-									break
-								}
-							}
+					analyzed.SubqueryTable = refBinding.TableName
+					analyzed.SubqueryIDField = refBinding.PrimaryKey.DBName
+
+					// Get the field column name from the last element
+					lastFieldName := path[len(path)-1].FieldName
+					for _, f := range refBinding.Fields {
+						if f.GoName == lastFieldName {
+							analyzed.SubqueryColumn = f.DBName
+							break
 						}
+					}
+					if analyzed.SubqueryColumn == "" {
+						return nil, fmt.Errorf("field %s not found in referenced table %s", lastFieldName, refBinding.TableName)
 					}
 					break
 				}
+			}
+			if !fkMatched {
+				return nil, fmt.Errorf("foreign key field %s not found on table %s", path[fkIndex].FieldName, binding.TableName)
 			}
 		} else {
 			// Simple field access (e.g., user.ID)
@@ -172,10 +181,9 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 			lastField := path[len(path)-1]
 
 			// Find the column name
-			varTypeName := getTypeName(path[0].Type)
-			binding, ok := pkg.Tables[varTypeName]
-			if !ok {
-				return nil, nil
+			binding, err := lookupTableByType(pkg, path[0].Type)
+			if err != nil {
+				return nil, err
 			}
 
 			for _, f := range binding.Fields {
@@ -183,6 +191,9 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 					analyzed.ColumnName = f.DBName
 					break
 				}
+			}
+			if analyzed.ColumnName == "" {
+				return nil, fmt.Errorf("field %s not found in table %s", lastField.FieldName, binding.TableName)
 			}
 		}
 	}
@@ -213,6 +224,24 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 			analyzed.Operator = "IS NULL"
 		case token.NEQ:
 			analyzed.Operator = "IS NOT NULL"
+		default:
+			return nil, fmt.Errorf("nil comparison only supports == and !=")
+		}
+	}
+
+	if analyzed.IsSubquery {
+		if analyzed.ForeignKeyCol == "" || analyzed.SubqueryTable == "" || analyzed.SubqueryIDField == "" || analyzed.SubqueryColumn == "" {
+			return nil, fmt.Errorf("incomplete subquery analysis for filter")
+		}
+		if !analyzed.IsNull && analyzed.SubqueryValue == "" && !analyzed.RightIsFunc {
+			return nil, fmt.Errorf("missing subquery comparison value")
+		}
+	} else {
+		if !analyzed.LeftIsFunc && analyzed.ColumnName == "" {
+			return nil, fmt.Errorf("missing column name in filter")
+		}
+		if !analyzed.IsNull && !analyzed.RightIsFunc && analyzed.Value == "" {
+			return nil, fmt.Errorf("missing right-hand value in filter")
 		}
 	}
 
@@ -252,12 +281,8 @@ func resolveColumnNameFromPath(pkg *Package, fieldPath []FieldPathElement) strin
 		return ""
 	}
 
-	// Get the type of the first element
-	firstElem := fieldPath[0]
-	typeName := getTypeName(firstElem.Type)
-
-	binding, ok := pkg.Tables[typeName]
-	if !ok {
+	binding, err := lookupTableByType(pkg, fieldPath[0].Type)
+	if err != nil {
 		return ""
 	}
 

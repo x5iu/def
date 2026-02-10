@@ -9,17 +9,11 @@ import (
 // GenerateSQL generates a SQL statement for a query method.
 func GenerateSQL(pkg *Package, method *QueryMethod) (string, error) {
 	// Determine the table from the return type
-	tableName := ""
-	if method.ReturnType.StructName != "" {
-		binding, ok := pkg.Tables[method.ReturnType.StructName]
-		if ok {
-			tableName = binding.TableName
-		}
+	binding, err := lookupTableByType(pkg, method.ReturnType.Type)
+	if err != nil {
+		return "", fmt.Errorf("could not determine table for method %s: %w", method.Name, err)
 	}
-
-	if tableName == "" {
-		return "", fmt.Errorf("could not determine table for method %s", method.Name)
-	}
+	tableName := binding.TableName
 
 	// Build SELECT clause
 	selectClause := "*"
@@ -119,12 +113,8 @@ func resolveColumnName(pkg *Package, fieldPath []FieldPathElement) string {
 		return ""
 	}
 
-	// Get the type of the first element
-	firstElem := fieldPath[0]
-	typeName := getTypeName(firstElem.Type)
-
-	binding, ok := pkg.Tables[typeName]
-	if !ok {
+	binding, err := lookupTableByType(pkg, fieldPath[0].Type)
+	if err != nil {
 		return ""
 	}
 
@@ -275,27 +265,16 @@ func GenerateMutationSQL(pkg *Package, method *MutationMethod) (string, error) {
 // generateInsertSQL generates an INSERT SQL statement.
 func generateInsertSQL(pkg *Package, method *MutationMethod) (string, error) {
 	// Determine the table name
-	tableName := ""
-	if method.TargetType != "" {
-		binding, ok := pkg.Tables[method.TargetType]
-		if ok {
-			tableName = binding.TableName
-		}
+	binding, err := lookupTableByTargetType(pkg, method.TargetType)
+	if err != nil {
+		return "", fmt.Errorf("could not determine table for method %s: %w", method.Name, err)
 	}
-
-	if tableName == "" {
-		return "", fmt.Errorf("could not determine table for method %s", method.Name)
-	}
+	tableName := binding.TableName
 
 	var sql string
 
 	// Entity mode: INSERT INTO table (col1, col2) VALUES (${param.Field1}, ${param.Field2})
 	if method.EntityParam != nil {
-		binding, ok := pkg.Tables[method.TargetType]
-		if !ok {
-			return "", fmt.Errorf("could not find table binding for type %s", method.TargetType)
-		}
-
 		var columns []string
 		var values []string
 		for _, field := range binding.Fields {
@@ -340,27 +319,19 @@ func generateInsertSQL(pkg *Package, method *MutationMethod) (string, error) {
 // generateUpdateSQL generates an UPDATE SQL statement.
 func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 	// Determine the table name
-	tableName := ""
-	if method.TargetType != "" {
-		binding, ok := pkg.Tables[method.TargetType]
-		if ok {
-			tableName = binding.TableName
-		}
+	binding, err := lookupTableByTargetType(pkg, method.TargetType)
+	if err != nil {
+		return "", fmt.Errorf("could not determine table for method %s: %w", method.Name, err)
 	}
-
-	if tableName == "" {
-		return "", fmt.Errorf("could not determine table for method %s", method.Name)
+	if len(method.Filters) == 0 {
+		return "", fmt.Errorf("def.Update requires at least one Filter expression in method %s", method.Name)
 	}
+	tableName := binding.TableName
 
 	var sql string
 
 	// Entity mode: UPDATE table SET col1 = ${param.Field1}, col2 = ${param.Field2} WHERE ...
 	if method.EntityParam != nil {
-		binding, ok := pkg.Tables[method.TargetType]
-		if !ok {
-			return "", fmt.Errorf("could not find table binding for type %s", method.TargetType)
-		}
-
 		// Build SET clause from all fields (skip primary key)
 		var setClause []string
 		for _, field := range binding.Fields {
@@ -449,17 +420,11 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 // generateDeleteSQL generates a DELETE SQL statement.
 func generateDeleteSQL(pkg *Package, method *MutationMethod) (string, error) {
 	// Determine the table name
-	tableName := ""
-	if method.TargetType != "" {
-		binding, ok := pkg.Tables[method.TargetType]
-		if ok {
-			tableName = binding.TableName
-		}
+	binding, err := lookupTableByTargetType(pkg, method.TargetType)
+	if err != nil {
+		return "", fmt.Errorf("could not determine table for method %s: %w", method.Name, err)
 	}
-
-	if tableName == "" {
-		return "", fmt.Errorf("could not determine table for method %s", method.Name)
-	}
+	tableName := binding.TableName
 
 	sql := fmt.Sprintf("DELETE FROM %s", tableName)
 
@@ -498,12 +463,8 @@ func resolveSetColumnName(pkg *Package, set SetExpr) string {
 		return ""
 	}
 
-	// Get the type of the first element
-	firstElem := set.FieldPath[0]
-	typeName := getTypeName(firstElem.Type)
-
-	binding, ok := pkg.Tables[typeName]
-	if !ok {
+	binding, err := lookupTableByType(pkg, set.FieldPath[0].Type)
+	if err != nil {
 		return ""
 	}
 
@@ -855,12 +816,47 @@ func splitConditions(condition string) []conditionPart {
 	var parts []conditionPart
 	var current strings.Builder
 	depth := 0
+	inSingleQuote := false
+	pendingConnector := ""
 	i := 0
+
+	flush := func() {
+		cond := strings.TrimSpace(current.String())
+		if cond == "" {
+			current.Reset()
+			return
+		}
+		parts = append(parts, conditionPart{
+			connector: pendingConnector,
+			condition: cond,
+		})
+		current.Reset()
+		pendingConnector = ""
+	}
 
 	for i < len(condition) {
 		c := condition[i]
 
-		if c == '(' {
+		if inSingleQuote {
+			current.WriteByte(c)
+			// SQL single-quote escaping: '' within a string literal.
+			if c == '\'' {
+				if i+1 < len(condition) && condition[i+1] == '\'' {
+					current.WriteByte(condition[i+1])
+					i += 2
+					continue
+				}
+				inSingleQuote = false
+			}
+			i++
+			continue
+		}
+
+		if c == '\'' {
+			inSingleQuote = true
+			current.WriteByte(c)
+			i++
+		} else if c == '(' {
 			depth++
 			current.WriteByte(c)
 			i++
@@ -872,16 +868,13 @@ func splitConditions(condition string) []conditionPart {
 			// Check for AND/OR at top level
 			remaining := condition[i:]
 			if strings.HasPrefix(remaining, " AND ") {
-				parts = append(parts, conditionPart{condition: current.String()})
-				current.Reset()
+				flush()
+				pendingConnector = "AND"
 				i += 5 // len(" AND ")
-				// The next part will have "AND" as connector
-				parts = append(parts, conditionPart{connector: "AND"})
 			} else if strings.HasPrefix(remaining, " OR ") {
-				parts = append(parts, conditionPart{condition: current.String()})
-				current.Reset()
+				flush()
+				pendingConnector = "OR"
 				i += 4 // len(" OR ")
-				parts = append(parts, conditionPart{connector: "OR"})
 			} else {
 				current.WriteByte(c)
 				i++
@@ -892,27 +885,9 @@ func splitConditions(condition string) []conditionPart {
 		}
 	}
 
-	// Handle remaining content
-	if current.Len() > 0 {
-		if len(parts) > 0 && parts[len(parts)-1].condition == "" {
-			// Attach to the last connector
-			parts[len(parts)-1].condition = current.String()
-		} else {
-			parts = append(parts, conditionPart{condition: current.String()})
-		}
-	}
+	flush()
 
-	// Merge connector parts with their conditions
-	var merged []conditionPart
-	for i := 0; i < len(parts); i++ {
-		if parts[i].connector != "" && parts[i].condition != "" {
-			merged = append(merged, parts[i])
-		} else if parts[i].connector == "" && parts[i].condition != "" {
-			merged = append(merged, parts[i])
-		}
-	}
-
-	return merged
+	return parts
 }
 
 // findKeywordOutsideSubquery finds a keyword position that is not inside a subquery.

@@ -41,22 +41,24 @@ type ParamInfo struct {
 // ReturnTypeInfo represents the return type of a query method.
 type ReturnTypeInfo struct {
 	Type       types.Type
-	IsSlice    bool   // true for []*T, false for *T
+	IsSlice    bool // true for []*T, false for *T
 	ElemType   types.Type
 	StructName string // e.g., "User" or "Project"
 }
 
 // QueryMethod represents a query method definition.
 type QueryMethod struct {
-	Name       string
-	Receiver   string // Receiver type name
-	Params     []ParamInfo
-	ReturnType ReturnTypeInfo
-	Columns    []ColumnExpr // SELECT columns, empty means SELECT *
-	Filters    []*FilterExpr
-	Limit      *PaginationExpr // LIMIT expression, nil means no LIMIT
-	Offset     *PaginationExpr // OFFSET expression, nil means no OFFSET
-	Pos        token.Pos
+	Name        string
+	Receiver    string // Receiver type name
+	Params      []ParamInfo
+	ParamTypes  []types.Type // All parameter types in declaration order (including context.Context)
+	ReturnType  ReturnTypeInfo
+	ResultTypes []types.Type // All result types in declaration order
+	Columns     []ColumnExpr // SELECT columns, empty means SELECT *
+	Filters     []*FilterExpr
+	Limit       *PaginationExpr // LIMIT expression, nil means no LIMIT
+	Offset      *PaginationExpr // OFFSET expression, nil means no OFFSET
+	Pos         token.Pos
 }
 
 // FilterOperand represents one side of a filter expression.
@@ -166,7 +168,9 @@ type MutationMethod struct {
 	Name          string              // Method name
 	Receiver      string              // Receiver type name
 	Params        []ParamInfo         // Method parameters
-	TargetType    string              // Target struct type name (e.g., "User")
+	ParamTypes    []types.Type        // All parameter types in declaration order (including context.Context)
+	ResultTypes   []types.Type        // All result types in declaration order
+	TargetType    string              // Target type key (pkgpath.Type) or legacy simple type name
 	Sets          []SetExpr           // SET expressions for Create/Update
 	Filters       []*FilterExpr       // WHERE conditions for Update/Delete
 	EntityParam   *ParamInfo          // Entity parameter for Create/Update entity mode
@@ -213,10 +217,12 @@ type InterfaceInfo struct {
 
 // InterfaceMethod represents a method in an interface.
 type InterfaceMethod struct {
-	Name       string
-	Signature  string // Full signature for output
-	Params     []ParamInfo
-	ReturnType ReturnTypeInfo
+	Name        string
+	Signature   string // Full signature for output
+	Params      []ParamInfo
+	ParamTypes  []types.Type // All parameter types in declaration order
+	ResultTypes []types.Type // All result types in declaration order
+	ReturnType  ReturnTypeInfo
 }
 
 // GeneratedMethod represents a method to be generated with SQL comment.

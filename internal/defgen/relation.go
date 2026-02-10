@@ -2,6 +2,7 @@ package defgen
 
 import (
 	"go/types"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -14,8 +15,15 @@ func AnalyzeRelations(pkg *Package) error {
 	seen := make(map[string]bool)
 	callbackMap := make(map[string]*CallbackMethod)
 
+	tableKeys := make([]string, 0, len(pkg.Tables))
+	for key := range pkg.Tables {
+		tableKeys = append(tableKeys, key)
+	}
+	sort.Strings(tableKeys)
+
 	// First pass: analyze foreign keys in each table
-	for _, table := range pkg.Tables {
+	for _, tableKey := range tableKeys {
+		table := pkg.Tables[tableKey]
 		for _, fk := range table.ForeignKeys {
 			// 1. Belongs-to (many-to-one): Project.User -> getUserByID
 			belongsTo := analyzeBelongsTo(pkg, table, fk)
@@ -44,14 +52,21 @@ func AnalyzeRelations(pkg *Package) error {
 	}
 
 	// Second pass: add has-many callback fields to referenced tables
-	for _, table := range pkg.Tables {
+	for _, tableKey := range tableKeys {
+		table := pkg.Tables[tableKey]
 		for _, fk := range table.ForeignKeys {
 			addHasManyCallbackField(pkg, callbackMap, table, fk)
 		}
 	}
 
 	// Convert callbackMap to slice
-	for _, cb := range callbackMap {
+	callbackKeys := make([]string, 0, len(callbackMap))
+	for key := range callbackMap {
+		callbackKeys = append(callbackKeys, key)
+	}
+	sort.Strings(callbackKeys)
+	for _, key := range callbackKeys {
+		cb := callbackMap[key]
 		if len(cb.Fields) > 0 {
 			pkg.CallbackMethods = append(pkg.CallbackMethods, cb)
 		}
@@ -70,8 +85,8 @@ func analyzeBelongsTo(pkg *Package, _ *TableBinding, fk ForeignKeyInfo) *Relatio
 	}
 
 	// Find the referenced table
-	refTable, ok := pkg.Tables[refTypeName]
-	if !ok {
+	refTable, err := lookupTableByType(pkg, fk.RefType)
+	if err != nil {
 		return nil
 	}
 
@@ -106,8 +121,8 @@ func analyzeHasMany(pkg *Package, sourceTable *TableBinding, fk ForeignKeyInfo) 
 	}
 
 	// Find the referenced table (User)
-	_, ok := pkg.Tables[refTypeName]
-	if !ok {
+	_, err := lookupTableByType(pkg, fk.RefType)
+	if err != nil {
 		return nil
 	}
 
@@ -188,8 +203,8 @@ func addHasManyCallbackField(pkg *Package, callbackMap map[string]*CallbackMetho
 	}
 
 	// Find the referenced table
-	refTable, ok := pkg.Tables[refTypeName]
-	if !ok {
+	refTable, err := lookupTableByType(pkg, fk.RefType)
+	if err != nil {
 		return
 	}
 

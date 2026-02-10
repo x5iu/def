@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/token"
+	"go/types"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -544,6 +545,7 @@ func TestGenerateMutationSQL(t *testing.T) {
 				Name:        "UpdateUser",
 				TargetType:  "User",
 				EntityParam: &ParamInfo{Name: "user"},
+				Filters:     testUpdateFilters(),
 			},
 			wantContains:   []string{"UPDATE users SET", "name = ${user.Name}", "age = ${user.Age}"},
 			wantNotContain: []string{"id = ${user.ID}"},
@@ -570,6 +572,7 @@ func TestGenerateMutationSQL(t *testing.T) {
 				Name:        "UpdateUser",
 				TargetType:  "User",
 				EntityParam: &ParamInfo{Name: "user"},
+				Filters:     testUpdateFilters(),
 			},
 			wantContains: []string{
 				"name = ${user.Name}",
@@ -598,6 +601,7 @@ func TestGenerateMutationSQL(t *testing.T) {
 				Name:        "UpdateSetting",
 				TargetType:  "Setting",
 				EntityParam: &ParamInfo{Name: "setting"},
+				Filters:     testUpdateFilters(),
 			},
 			wantContains: []string{
 				"UPDATE settings SET",
@@ -685,6 +689,23 @@ func containsHelper(s, substr string) bool {
 	return false
 }
 
+func testUpdateFilters() []*FilterExpr {
+	return []*FilterExpr{
+		{
+			Kind: FilterComparison,
+			Op:   token.GTR,
+			Left: FilterOperand{
+				IsFunc:   true,
+				FuncName: "COUNT",
+				FuncArgs: []FuncArg{
+					{IsLiteral: true, Value: "1", Kind: token.INT},
+				},
+			},
+			Right: FilterOperand{IsLiteral: true, LiteralValue: "0", LiteralKind: token.INT},
+		},
+	}
+}
+
 func TestGenerateCallbackMethod_BelongsToRefTypeName(t *testing.T) {
 	// Scenario: struct field name "Author" differs from type name "User"
 	// e.g., Author *User `db:"-" foreign_key:"author_id"`
@@ -741,6 +762,216 @@ func TestBuildDefcFeatures(t *testing.T) {
 				t.Errorf("buildDefcFeatures(%v, %q) = %q, want %q", tt.hasCallback, tt.extra, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFindMatchingInterface_UsesExactSignature(t *testing.T) {
+	errType := types.Universe.Lookup("error").Type()
+
+	pkg := &Package{
+		Methods: []*QueryMethod{
+			{
+				Name:        "GetName",
+				ParamTypes:  []types.Type{types.Typ[types.Int64]},
+				ResultTypes: []types.Type{types.Typ[types.String], errType},
+			},
+		},
+		Interfaces: map[string]*InterfaceInfo{
+			"BadByNameOnly": {
+				Name: "BadByNameOnly",
+				Methods: []InterfaceMethod{
+					{
+						Name:        "GetName",
+						ParamTypes:  []types.Type{types.Typ[types.String]},
+						ResultTypes: []types.Type{types.Typ[types.String], errType},
+					},
+				},
+			},
+			"Good": {
+				Name: "Good",
+				Methods: []InterfaceMethod{
+					{
+						Name:        "GetName",
+						ParamTypes:  []types.Type{types.Typ[types.Int64]},
+						ResultTypes: []types.Type{types.Typ[types.String], errType},
+					},
+				},
+			},
+			"GoodSuperset": {
+				Name: "GoodSuperset",
+				Methods: []InterfaceMethod{
+					{
+						Name:        "GetName",
+						ParamTypes:  []types.Type{types.Typ[types.Int64]},
+						ResultTypes: []types.Type{types.Typ[types.String], errType},
+					},
+					{
+						Name:        "Extra",
+						ParamTypes:  []types.Type{types.Typ[types.Int]},
+						ResultTypes: []types.Type{errType},
+					},
+				},
+			},
+		},
+	}
+
+	iface, err := findMatchingInterface(pkg)
+	if err != nil {
+		t.Fatalf("findMatchingInterface() error = %v", err)
+	}
+	if iface == nil {
+		t.Fatalf("findMatchingInterface() returned nil")
+	}
+	if iface.Name != "Good" {
+		t.Fatalf("findMatchingInterface() = %s, want Good", iface.Name)
+	}
+}
+
+func TestFindMatchingInterface_AmbiguousExactMatches(t *testing.T) {
+	errType := types.Universe.Lookup("error").Type()
+
+	pkg := &Package{
+		Methods: []*QueryMethod{
+			{
+				Name:        "GetName",
+				ParamTypes:  []types.Type{types.Typ[types.Int64]},
+				ResultTypes: []types.Type{types.Typ[types.String], errType},
+			},
+		},
+		Interfaces: map[string]*InterfaceInfo{
+			"First": {
+				Name: "First",
+				Methods: []InterfaceMethod{
+					{
+						Name:        "GetName",
+						ParamTypes:  []types.Type{types.Typ[types.Int64]},
+						ResultTypes: []types.Type{types.Typ[types.String], errType},
+					},
+				},
+			},
+			"Second": {
+				Name: "Second",
+				Methods: []InterfaceMethod{
+					{
+						Name:        "GetName",
+						ParamTypes:  []types.Type{types.Typ[types.Int64]},
+						ResultTypes: []types.Type{types.Typ[types.String], errType},
+					},
+				},
+			},
+		},
+	}
+
+	iface, err := findMatchingInterface(pkg)
+	if err == nil {
+		t.Fatalf("findMatchingInterface() error = nil, iface = %+v, want ambiguous error", iface)
+	}
+	if !strings.Contains(err.Error(), "multiple exact matching interfaces") {
+		t.Fatalf("findMatchingInterface() error = %v, want ambiguous exact-match error", err)
+	}
+}
+
+func TestLookupTableByType_CrossPackageBindTable(t *testing.T) {
+	newNamed := func(pkgPath, pkgName, typeName string) *types.Named {
+		p := types.NewPackage(pkgPath, pkgName)
+		obj := types.NewTypeName(token.NoPos, p, typeName, nil)
+		return types.NewNamed(obj, types.NewStruct(nil, nil), nil)
+	}
+
+	userA := newNamed("example.com/a", "a", "User")
+	userB := newNamed("example.com/b", "b", "User")
+
+	pkg := &Package{
+		Tables: map[string]*TableBinding{
+			getTypeKey(userA): {TypeName: "User", TableName: "users_a"},
+			getTypeKey(userB): {TypeName: "User", TableName: "users_b"},
+		},
+	}
+
+	gotA, err := lookupTableByType(pkg, userA)
+	if err != nil {
+		t.Fatalf("lookupTableByType(userA) error = %v", err)
+	}
+	if gotA.TableName != "users_a" {
+		t.Fatalf("lookupTableByType(userA) = %s, want users_a", gotA.TableName)
+	}
+
+	gotB, err := lookupTableByType(pkg, userB)
+	if err != nil {
+		t.Fatalf("lookupTableByType(userB) error = %v", err)
+	}
+	if gotB.TableName != "users_b" {
+		t.Fatalf("lookupTableByType(userB) = %s, want users_b", gotB.TableName)
+	}
+
+	if _, err := lookupTableBySimpleName(pkg, "User"); err == nil {
+		t.Fatalf("lookupTableBySimpleName(User) should fail on ambiguity")
+	}
+}
+
+func TestSplitConditions_IgnoreQuotedAndOr(t *testing.T) {
+	parts := splitConditions("name = 'A AND B' AND status = 'X OR Y' OR age > 1")
+	if len(parts) != 3 {
+		t.Fatalf("splitConditions() len = %d, want 3 (%+v)", len(parts), parts)
+	}
+	if parts[0].condition != "name = 'A AND B'" {
+		t.Fatalf("parts[0].condition = %q, want %q", parts[0].condition, "name = 'A AND B'")
+	}
+	if parts[1].connector != "AND" || strings.TrimSpace(parts[1].condition) != "status = 'X OR Y'" {
+		t.Fatalf("parts[1] = %+v, want connector AND with quoted OR preserved", parts[1])
+	}
+	if parts[2].connector != "OR" || strings.TrimSpace(parts[2].condition) != "age > 1" {
+		t.Fatalf("parts[2] = %+v, want connector OR + age condition", parts[2])
+	}
+}
+
+func TestGenerateMutationSQL_UpdateWithoutFilterReturnsError(t *testing.T) {
+	pkg := &Package{
+		Tables: map[string]*TableBinding{
+			"User": {
+				TypeName:  "User",
+				TableName: "users",
+				Fields: []FieldInfo{
+					{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+					{GoName: "Name", DBName: "name"},
+				},
+			},
+		},
+	}
+	method := &MutationMethod{
+		Kind:        MethodKindUpdate,
+		Name:        "UpdateUser",
+		TargetType:  "User",
+		EntityParam: &ParamInfo{Name: "user"},
+	}
+
+	_, err := GenerateMutationSQL(pkg, method)
+	if err == nil {
+		t.Fatalf("GenerateMutationSQL() expected error for missing update filters")
+	}
+	if !strings.Contains(err.Error(), "requires at least one Filter expression") {
+		t.Fatalf("GenerateMutationSQL() error = %v, want missing-filter error", err)
+	}
+}
+
+func TestAnalyzeFilter_InvalidPathReturnsError(t *testing.T) {
+	filter := &FilterExpr{
+		Kind: FilterComparison,
+		Op:   token.EQL,
+		Left: FilterOperand{
+			IsField:   true,
+			FieldPath: []FieldPathElement{{VarName: "u"}},
+		},
+		Right: FilterOperand{
+			IsLiteral:    true,
+			LiteralValue: "1",
+			LiteralKind:  token.INT,
+		},
+	}
+
+	_, err := AnalyzeFilter(&Package{Tables: map[string]*TableBinding{}}, filter)
+	if err == nil {
+		t.Fatalf("AnalyzeFilter() expected error for invalid field path")
 	}
 }
 
@@ -1015,6 +1246,7 @@ func TestGenerateMutationSQLWithReturning(t *testing.T) {
 				Name:        "UpdateUser",
 				TargetType:  "User",
 				EntityParam: &ParamInfo{Name: "user"},
+				Filters:     testUpdateFilters(),
 				ReturnType: &MutationReturnType{
 					StructName: "User",
 				},
@@ -1044,6 +1276,7 @@ func TestGenerateMutationSQLWithReturning(t *testing.T) {
 				Name:        "UpdateUser",
 				TargetType:  "User",
 				EntityParam: &ParamInfo{Name: "user"},
+				Filters:     testUpdateFilters(),
 				ReturnType:  nil,
 			},
 			wantContains:   []string{"UPDATE users SET"},

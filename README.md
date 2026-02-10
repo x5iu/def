@@ -405,7 +405,7 @@ func (q *querier) CreateUser(ctx context.Context, name string, age int) (sql.Res
 
 #### Update
 
-Use `def.Update` with `def.Set` and optional `def.Filter`:
+Use `def.Update` with `def.Set` and required `def.Filter`:
 
 **Entity Mode** - Update entire struct (primary key excluded from SET):
 
@@ -428,6 +428,8 @@ func (q *querier) UpdateUserName(ctx context.Context, id int64, name string) (sq
 }
 // Generates: UPDATE users SET name = ${name} WHERE id = ${id}
 ```
+
+`def.Update` must include at least one `def.Filter(...)` to prevent accidental full-table updates.
 
 Multiple SET clauses:
 

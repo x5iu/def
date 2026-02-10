@@ -1,6 +1,7 @@
 package defgen
 
 import (
+	"fmt"
 	"go/ast"
 	"go/types"
 	"reflect"
@@ -60,11 +61,95 @@ func getTypeName(t types.Type) string {
 	switch ty := t.(type) {
 	case *types.Pointer:
 		return getTypeName(ty.Elem())
+	case *types.Slice:
+		return getTypeName(ty.Elem())
 	case *types.Named:
 		return ty.Obj().Name()
 	default:
 		return ""
 	}
+}
+
+// getTypeKey extracts a stable, package-qualified key from a types.Type.
+// Example: "*entity.User" -> "example.com/project/entity.User".
+func getTypeKey(t types.Type) string {
+	switch ty := t.(type) {
+	case *types.Pointer:
+		return getTypeKey(ty.Elem())
+	case *types.Slice:
+		return getTypeKey(ty.Elem())
+	case *types.Named:
+		obj := ty.Obj()
+		if obj == nil {
+			return ""
+		}
+		if obj.Pkg() == nil {
+			return obj.Name()
+		}
+		return obj.Pkg().Path() + "." + obj.Name()
+	default:
+		return ""
+	}
+}
+
+func typeStringForLookup(t types.Type) string {
+	if t == nil {
+		return "<nil>"
+	}
+	return types.TypeString(t, func(p *types.Package) string {
+		if p == nil {
+			return ""
+		}
+		return p.Path()
+	})
+}
+
+// lookupTableByType resolves a table binding from a concrete type.
+func lookupTableByType(pkg *Package, t types.Type) (*TableBinding, error) {
+	key := getTypeKey(t)
+	if key != "" {
+		if binding, ok := pkg.Tables[key]; ok {
+			return binding, nil
+		}
+	}
+
+	name := getTypeName(t)
+	if name != "" {
+		binding, err := lookupTableBySimpleName(pkg, name)
+		if err == nil {
+			return binding, nil
+		}
+	}
+
+	return nil, fmt.Errorf("table binding not found for type %s", typeStringForLookup(t))
+}
+
+// lookupTableByTargetType resolves a target type key (or legacy simple name) to a table binding.
+func lookupTableByTargetType(pkg *Package, targetType string) (*TableBinding, error) {
+	if targetType == "" {
+		return nil, fmt.Errorf("empty target type")
+	}
+	if binding, ok := pkg.Tables[targetType]; ok {
+		return binding, nil
+	}
+	return lookupTableBySimpleName(pkg, targetType)
+}
+
+func lookupTableBySimpleName(pkg *Package, typeName string) (*TableBinding, error) {
+	var matched *TableBinding
+	for _, binding := range pkg.Tables {
+		if binding.TypeName != typeName {
+			continue
+		}
+		if matched != nil {
+			return nil, fmt.Errorf("ambiguous type name %q across multiple packages", typeName)
+		}
+		matched = binding
+	}
+	if matched == nil {
+		return nil, fmt.Errorf("table binding not found for type name %q", typeName)
+	}
+	return matched, nil
 }
 
 // parseAllStructs scans the package and collects all struct definitions with their tags.
@@ -101,8 +186,13 @@ func parseAllStructs(pkg *Package) map[string]*structInfo {
 				return true
 			}
 
+			typeKey := getTypeKey(named)
+			if typeKey == "" {
+				return true
+			}
+
 			fields, foreignKeys := parseStructTags(underlying)
-			structs[name] = &structInfo{
+			structs[typeKey] = &structInfo{
 				name:        name,
 				typ:         named,
 				structType:  underlying,
@@ -210,34 +300,57 @@ func parseInterfaceDefs(pkg *Package) {
 
 				// Parse parameters
 				var params []ParamInfo
+				var paramTypes []types.Type
 				if ft.Params != nil {
 					for _, param := range ft.Params.List {
 						paramType := pkg.TypesInfo.TypeOf(param.Type)
+						if len(param.Names) == 0 {
+							params = append(params, ParamInfo{
+								Name: "",
+								Type: paramType,
+							})
+							paramTypes = append(paramTypes, paramType)
+							continue
+						}
 						for _, name := range param.Names {
 							params = append(params, ParamInfo{
 								Name: name.Name,
 								Type: paramType,
 							})
+							paramTypes = append(paramTypes, paramType)
 						}
 					}
 				}
 
 				// Parse return type
 				var returnType ReturnTypeInfo
+				var resultTypes []types.Type
 				if ft.Results != nil && len(ft.Results.List) > 0 {
 					firstResult := ft.Results.List[0]
 					resultType := pkg.TypesInfo.TypeOf(firstResult.Type)
 					returnType = analyzeReturnType(resultType)
+					for _, result := range ft.Results.List {
+						resultType := pkg.TypesInfo.TypeOf(result.Type)
+						if len(result.Names) == 0 {
+							resultTypes = append(resultTypes, resultType)
+							continue
+						}
+						for range result.Names {
+							resultTypes = append(resultTypes, resultType)
+						}
+					}
 				}
 
 				// Build signature string
 				sig := buildSignature(pkg, ft)
 
 				info.Methods = append(info.Methods, InterfaceMethod{
-					Name:       methodName,
-					Signature:  sig,
-					Params:     params,
-					ReturnType: returnType,
+					Name:        methodName,
+					Signature:   sig,
+					Params:      params,
+					ParamTypes:  paramTypes,
+					ResultTypes: resultTypes,
+					ReturnType:  returnType,
 				})
 			}
 
