@@ -626,8 +626,16 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 
 	// Cache self first to prevent circular references
 	if cb.IDField != nil {
-		sb.WriteString(fmt.Sprintf("\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s)\n\n",
+		sb.WriteString(fmt.Sprintf("\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s)\n",
 			cb.IDField.DBName, receiverName, cb.IDField.GoName, receiverName))
+		// Also cache self under FK-based keys so belongs-to lookups from related structs find us
+		for _, field := range cb.Fields {
+			if field.IsSlice && field.CacheKey != cb.IDField.DBName {
+				sb.WriteString(fmt.Sprintf("\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s)\n",
+					field.CacheKey, receiverName, field.KeyFieldName, receiverName))
+			}
+		}
+		sb.WriteString("\n")
 	}
 
 	// Load each related field

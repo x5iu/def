@@ -1018,6 +1018,49 @@ func TestGenerateCallbackMethod_HasManyCustomFieldName(t *testing.T) {
 	}
 }
 
+func TestGenerateCallbackMethod_PrecacheSelfByHasManyForeignKey(t *testing.T) {
+	cb := &CallbackMethod{
+		StructName:     "Model",
+		StructTypeName: "*Model",
+		IDField: &FieldInfo{
+			GoName: "ID",
+			DBName: "id",
+		},
+		Fields: []CallbackField{
+			{
+				FieldName:     "Endpoints",
+				AliasTypeName: "ModelEndpointRows",
+				MethodName:    "getModelEndpointRowsByModelID",
+				KeyFieldName:  "ID",
+				IsSlice:       true,
+				CacheKey:      "model_id",
+				SliceType:     "[]*ModelEndpointRow",
+				FieldIsAlias:  false,
+			},
+			{
+				FieldName:    "Owner",
+				RefTypeName:  "User",
+				MethodName:   "getUserByID",
+				KeyFieldName: "OwnerID",
+				IsSlice:      false,
+				CacheKey:     "owner_id",
+			},
+		},
+	}
+
+	got := generateCallbackMethod(cb, "Store")
+
+	if !strings.Contains(got, "setCache(ctx, fmt.Sprintf(\"id:%v\", m.ID), m)") {
+		t.Errorf("should pre-cache self by primary key.\nGot:\n%s", got)
+	}
+	if !strings.Contains(got, "setCache(ctx, fmt.Sprintf(\"model_id:%v\", m.ID), m)") {
+		t.Errorf("should also pre-cache self by has-many foreign key.\nGot:\n%s", got)
+	}
+	if strings.Contains(got, "setCache(ctx, fmt.Sprintf(\"owner_id:%v\", m.OwnerID), m)") {
+		t.Errorf("should not pre-cache self for belongs-to foreign keys.\nGot:\n%s", got)
+	}
+}
+
 func TestCallbackWithoutCache_ReturnsError(t *testing.T) {
 	pkg := &Package{
 		PkgName: "testpkg",
