@@ -160,6 +160,7 @@ type SetValue struct {
 	ParamName    string      // parameter name if IsParam
 	LiteralValue string      // literal value if IsLiteral
 	LiteralKind  token.Token // STRING, INT, FLOAT for literals
+	ExprSQL      string      // preformatted SQL expression (e.g., "count + 1", "now()")
 }
 
 // MutationMethod represents a mutation method (INSERT/UPDATE/DELETE).

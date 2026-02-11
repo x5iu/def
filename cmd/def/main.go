@@ -71,6 +71,7 @@ Supported expressions:
   Update:
     - def.Update(user, def.Filter(user.ID == user.ID))  // entity mode
     - def.Update(def.Set(user.Name, name), def.Filter(user.ID == id))
+    - def.Update(def.Set(user.Count, user.Count+1), def.Set(user.UpdatedAt, def.Func[any]("now")), def.Filter(user.ID == id))
 
   Delete:
     - def.Delete(def.Filter(user.ID == id))

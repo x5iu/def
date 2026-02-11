@@ -3,6 +3,7 @@ package defgen
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
 	"go/token"
 	"go/types"
 	"os"
@@ -436,6 +437,202 @@ func TestFormatFuncOperand(t *testing.T) {
 				t.Errorf("formatFuncOperand() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseSetValueExpressions(t *testing.T) {
+	newNamed := func(pkgPath, pkgName, typeName string) *types.Named {
+		p := types.NewPackage(pkgPath, pkgName)
+		obj := types.NewTypeName(token.NoPos, p, typeName, nil)
+		return types.NewNamed(obj, types.NewStruct(nil, nil), nil)
+	}
+
+	userType := newNamed("example.com/demo", "demo", "User")
+	tableKey := getTypeKey(userType)
+	baseTables := map[string]*TableBinding{
+		tableKey: {
+			Type:      userType,
+			TypeName:  "User",
+			TableName: "users",
+			Fields: []FieldInfo{
+				{GoName: "ID", DBName: "id"},
+				{GoName: "Count", DBName: "count"},
+				{GoName: "UpdatedAt", DBName: "updated_at"},
+			},
+		},
+	}
+
+	t.Run("field plus literal", func(t *testing.T) {
+		userIdent := ast.NewIdent("user")
+		expr := &ast.BinaryExpr{
+			X:  &ast.SelectorExpr{X: userIdent, Sel: ast.NewIdent("Count")},
+			Op: token.ADD,
+			Y:  &ast.BasicLit{Kind: token.INT, Value: "1"},
+		}
+		pkg := &Package{
+			TypesInfo: &types.Info{
+				Uses: map[*ast.Ident]types.Object{
+					userIdent: types.NewVar(token.NoPos, nil, "user", userType),
+				},
+			},
+			Tables: baseTables,
+		}
+
+		value, err := parseSetValue(pkg, expr, map[string]*structInfo{}, nil)
+		if err != nil {
+			t.Fatalf("parseSetValue() error = %v", err)
+		}
+		if value.ExprSQL != "count + 1" {
+			t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, "count + 1")
+		}
+	})
+
+	t.Run("field plus param", func(t *testing.T) {
+		userIdent := ast.NewIdent("user")
+		expr := &ast.BinaryExpr{
+			X:  &ast.SelectorExpr{X: userIdent, Sel: ast.NewIdent("Count")},
+			Op: token.ADD,
+			Y:  ast.NewIdent("delta"),
+		}
+		pkg := &Package{
+			TypesInfo: &types.Info{
+				Uses: map[*ast.Ident]types.Object{
+					userIdent: types.NewVar(token.NoPos, nil, "user", userType),
+				},
+			},
+			Tables: baseTables,
+		}
+
+		value, err := parseSetValue(pkg, expr, map[string]*structInfo{}, []ParamInfo{
+			{Name: "delta", Type: types.Typ[types.Int64]},
+		})
+		if err != nil {
+			t.Fatalf("parseSetValue() error = %v", err)
+		}
+		if value.ExprSQL != "count + ${delta}" {
+			t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, "count + ${delta}")
+		}
+	})
+
+	t.Run("direct function call", func(t *testing.T) {
+		expr := &ast.CallExpr{Fun: ast.NewIdent("now")}
+		value, err := parseSetValue(&Package{}, expr, map[string]*structInfo{}, nil)
+		if err != nil {
+			t.Fatalf("parseSetValue() error = %v", err)
+		}
+		if value.ExprSQL != "now()" {
+			t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, "now()")
+		}
+	})
+
+	t.Run("def.Func call", func(t *testing.T) {
+		defIdent := ast.NewIdent("def")
+		expr := &ast.CallExpr{
+			Fun: &ast.SelectorExpr{
+				X:   defIdent,
+				Sel: ast.NewIdent("Func"),
+			},
+			Args: []ast.Expr{
+				&ast.BasicLit{Kind: token.STRING, Value: `"now"`},
+			},
+		}
+		pkg := &Package{
+			TypesInfo: &types.Info{
+				Uses: map[*ast.Ident]types.Object{
+					defIdent: types.NewPkgName(token.NoPos, nil, "def", types.NewPackage(defPkgPath, "def")),
+				},
+			},
+		}
+
+		value, err := parseSetValue(pkg, expr, map[string]*structInfo{}, nil)
+		if err != nil {
+			t.Fatalf("parseSetValue() error = %v", err)
+		}
+		if value.ExprSQL != "now()" {
+			t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, "now()")
+		}
+	})
+}
+
+func TestGenerateMutationSQL_UpdateFieldModeExpressions(t *testing.T) {
+	newNamed := func(pkgPath, pkgName, typeName string) *types.Named {
+		p := types.NewPackage(pkgPath, pkgName)
+		obj := types.NewTypeName(token.NoPos, p, typeName, nil)
+		return types.NewNamed(obj, types.NewStruct(nil, nil), nil)
+	}
+
+	userType := newNamed("example.com/demo", "demo", "User")
+	tableKey := getTypeKey(userType)
+
+	pkg := &Package{
+		Tables: map[string]*TableBinding{
+			tableKey: {
+				Type:      userType,
+				TypeName:  "User",
+				TableName: "users",
+				Fields: []FieldInfo{
+					{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+					{GoName: "Count", DBName: "count"},
+					{GoName: "UpdatedAt", DBName: "updated_at"},
+				},
+			},
+		},
+	}
+
+	method := &MutationMethod{
+		Kind:       MethodKindUpdate,
+		Name:       "BumpCounter",
+		TargetType: tableKey,
+		Sets: []SetExpr{
+			{
+				FieldPath: []FieldPathElement{
+					{VarName: "user", Type: userType},
+					{FieldName: "Count"},
+				},
+				Value: SetValue{ExprSQL: "count + 1"},
+			},
+			{
+				FieldPath: []FieldPathElement{
+					{VarName: "user", Type: userType},
+					{FieldName: "UpdatedAt"},
+				},
+				Value: SetValue{ExprSQL: "now()"},
+			},
+		},
+		Filters: []*FilterExpr{
+			{
+				Kind: FilterComparison,
+				Op:   token.EQL,
+				Left: FilterOperand{
+					IsField: true,
+					FieldPath: []FieldPathElement{
+						{VarName: "user", Type: userType},
+						{FieldName: "ID"},
+					},
+				},
+				Right: FilterOperand{
+					IsParam:   true,
+					ParamName: "id",
+				},
+			},
+		},
+	}
+
+	got, err := GenerateMutationSQL(pkg, method)
+	if err != nil {
+		t.Fatalf("GenerateMutationSQL() error = %v", err)
+	}
+	if !strings.Contains(got, "UPDATE users SET") {
+		t.Fatalf("GenerateMutationSQL() = %q, want UPDATE clause", got)
+	}
+	if !strings.Contains(got, "count = count + 1") {
+		t.Fatalf("GenerateMutationSQL() = %q, want arithmetic SET expression", got)
+	}
+	if !strings.Contains(got, "updated_at = now()") {
+		t.Fatalf("GenerateMutationSQL() = %q, want function SET expression", got)
+	}
+	if !strings.Contains(got, "WHERE id = ${id}") {
+		t.Fatalf("GenerateMutationSQL() = %q, want WHERE clause", got)
 	}
 }
 

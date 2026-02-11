@@ -445,6 +445,20 @@ func (q *querier) UpdateUser(ctx context.Context, id int64, name string, age int
 // Generates: UPDATE users SET name = ${name}, age = ${age} WHERE id = ${id}
 ```
 
+SET expressions and SQL functions:
+
+```go
+func (q *querier) BumpUserVersion(ctx context.Context, id int64) (sql.Result, error) {
+    var user User
+    return def.Update(
+        def.Set(user.Version, user.Version+1),
+        def.Set(user.UpdatedAt, def.Func[any]("now")),
+        def.Filter(user.ID == id),
+    )
+}
+// Generates: UPDATE users SET version = version + 1, updated_at = now() WHERE id = ${id}
+```
+
 #### Delete
 
 Use `def.Delete` with optional `def.Filter`:

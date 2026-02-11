@@ -95,6 +95,8 @@ func Delete(any, ...any) any { return nil }
 // Set specifies a column assignment for Create or Update operations.
 // First argument is the field reference (e.g., user.Name), second is the value.
 // Example: def.Set(user.Name, name) generates "name = ${name}"
+// Example: def.Set(user.Count, user.Count+1) generates "count = count + 1"
+// Example: def.Set(user.UpdatedAt, def.Func[any]("now")) generates "updated_at = now()"
 func Set(any, any) any { return nil }
 
 // Limit specifies the maximum number of rows to return.

@@ -1407,7 +1407,7 @@ func parseSetExpr(pkg *Package, call *ast.CallExpr, structs map[string]*structIn
 
 	// Parse value (second argument)
 	valueArg := call.Args[1]
-	setValue, err := parseSetValue(pkg, valueArg, params)
+	setValue, err := parseSetValue(pkg, valueArg, structs, params)
 	if err != nil {
 		return setExpr, fmt.Errorf("failed to parse Set value: %w", err)
 	}
@@ -1417,12 +1417,12 @@ func parseSetExpr(pkg *Package, call *ast.CallExpr, structs map[string]*structIn
 }
 
 // parseSetValue parses the value part of a def.Set call.
-func parseSetValue(_ *Package, expr ast.Expr, params []ParamInfo) (SetValue, error) {
+func parseSetValue(pkg *Package, expr ast.Expr, structs map[string]*structInfo, params []ParamInfo) (SetValue, error) {
 	var value SetValue
 
 	switch e := expr.(type) {
 	case *ast.Ident:
-		// Parameter reference
+		// Method parameter reference.
 		for _, p := range params {
 			if p.Name == e.Name {
 				value.IsParam = true
@@ -1430,18 +1430,212 @@ func parseSetValue(_ *Package, expr ast.Expr, params []ParamInfo) (SetValue, err
 				return value, nil
 			}
 		}
+		// Special SQL literals.
+		switch e.Name {
+		case "nil":
+			value.ExprSQL = "NULL"
+			return value, nil
+		case "true", "false":
+			value.ExprSQL = strings.ToUpper(e.Name)
+			return value, nil
+		}
 		return value, fmt.Errorf("unknown identifier: %s", e.Name)
 
 	case *ast.BasicLit:
-		// Literal value
+		// Literal value.
 		value.IsLiteral = true
 		value.LiteralValue = e.Value
 		value.LiteralKind = e.Kind
 		return value, nil
 
 	default:
-		return value, fmt.Errorf("unsupported Set value type: %T", expr)
+		exprSQL, err := buildSetValueExprSQL(pkg, expr, structs, params)
+		if err != nil {
+			return value, err
+		}
+		value.ExprSQL = exprSQL
+		return value, nil
 	}
+}
+
+func buildSetValueExprSQL(pkg *Package, expr ast.Expr, structs map[string]*structInfo, params []ParamInfo) (string, error) {
+	switch e := expr.(type) {
+	case *ast.ParenExpr:
+		inner, err := buildSetValueExprSQL(pkg, e.X, structs, params)
+		if err != nil {
+			return "", err
+		}
+		return "(" + inner + ")", nil
+
+	case *ast.UnaryExpr:
+		if e.Op != token.ADD && e.Op != token.SUB {
+			return "", fmt.Errorf("unsupported unary operator in Set value: %s", e.Op)
+		}
+		inner, err := buildSetValueExprSQL(pkg, e.X, structs, params)
+		if err != nil {
+			return "", err
+		}
+		if _, ok := e.X.(*ast.BinaryExpr); ok {
+			inner = "(" + inner + ")"
+		}
+		return e.Op.String() + inner, nil
+
+	case *ast.BinaryExpr:
+		op, ok := setBinaryOp(e.Op)
+		if !ok {
+			return "", fmt.Errorf("unsupported binary operator in Set value: %s", e.Op)
+		}
+
+		left, err := buildSetValueExprSQL(pkg, e.X, structs, params)
+		if err != nil {
+			return "", err
+		}
+		right, err := buildSetValueExprSQL(pkg, e.Y, structs, params)
+		if err != nil {
+			return "", err
+		}
+
+		if child, ok := e.X.(*ast.BinaryExpr); ok && setExprNeedsParens(child.Op, e.Op, false) {
+			left = "(" + left + ")"
+		}
+		if child, ok := e.Y.(*ast.BinaryExpr); ok && setExprNeedsParens(child.Op, e.Op, true) {
+			right = "(" + right + ")"
+		}
+
+		return left + " " + op + " " + right, nil
+
+	case *ast.SelectorExpr:
+		fieldPath, err := parseFieldPath(pkg, e, structs)
+		if err != nil {
+			return "", fmt.Errorf("failed to parse field path in Set value: %w", err)
+		}
+		colName := resolveColumnNameFromPath(pkg, fieldPath)
+		if colName == "" {
+			return "", fmt.Errorf("failed to resolve column name in Set value")
+		}
+		return colName, nil
+
+	case *ast.Ident:
+		for _, p := range params {
+			if p.Name == e.Name {
+				return fmt.Sprintf("${%s}", e.Name), nil
+			}
+		}
+		switch e.Name {
+		case "nil":
+			return "NULL", nil
+		case "true", "false":
+			return strings.ToUpper(e.Name), nil
+		default:
+			return "", fmt.Errorf("unknown identifier in Set value expression: %s", e.Name)
+		}
+
+	case *ast.BasicLit:
+		return formatLiteral(e.Value, e.Kind), nil
+
+	case *ast.CallExpr:
+		if isDefCall(pkg, e, "Func") {
+			return buildSetDefFuncSQL(pkg, e, structs, params)
+		}
+		if funcName, ok := isGenericDefCall(pkg, e); ok && funcName == "Func" {
+			return buildSetDefFuncSQL(pkg, e, structs, params)
+		}
+
+		funcName, err := setCallName(e.Fun)
+		if err != nil {
+			return "", err
+		}
+		var args []string
+		for _, arg := range e.Args {
+			argSQL, err := buildSetValueExprSQL(pkg, arg, structs, params)
+			if err != nil {
+				return "", err
+			}
+			args = append(args, argSQL)
+		}
+		return fmt.Sprintf("%s(%s)", funcName, strings.Join(args, ", ")), nil
+
+	default:
+		return "", fmt.Errorf("unsupported Set value type: %T", expr)
+	}
+}
+
+func setBinaryOp(op token.Token) (string, bool) {
+	switch op {
+	case token.ADD:
+		return "+", true
+	case token.SUB:
+		return "-", true
+	case token.MUL:
+		return "*", true
+	case token.QUO:
+		return "/", true
+	case token.REM:
+		return "%", true
+	default:
+		return "", false
+	}
+}
+
+func setExprNeedsParens(childOp, parentOp token.Token, right bool) bool {
+	childPrec := childOp.Precedence()
+	parentPrec := parentOp.Precedence()
+
+	if childPrec < parentPrec {
+		return true
+	}
+	if !right || childPrec != parentPrec {
+		return false
+	}
+
+	// Preserve evaluation order for non-associative operators on the right side.
+	return parentOp == token.SUB || parentOp == token.QUO || parentOp == token.REM
+}
+
+func setCallName(fun ast.Expr) (string, error) {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		return f.Name, nil
+	case *ast.SelectorExpr:
+		left, err := setCallName(f.X)
+		if err != nil || left == "" {
+			return f.Sel.Name, nil
+		}
+		return left + "." + f.Sel.Name, nil
+	case *ast.IndexExpr:
+		return setCallName(f.X)
+	case *ast.IndexListExpr:
+		return setCallName(f.X)
+	default:
+		return "", fmt.Errorf("unsupported function expression in Set value: %T", fun)
+	}
+}
+
+func buildSetDefFuncSQL(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, error) {
+	if len(call.Args) < 1 {
+		return "", fmt.Errorf("def.Func requires at least 1 argument (function name)")
+	}
+
+	nameLit, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || nameLit.Kind != token.STRING {
+		return "", fmt.Errorf("def.Func first argument must be a string literal")
+	}
+
+	funcName, err := strconv.Unquote(nameLit.Value)
+	if err != nil {
+		return "", fmt.Errorf("invalid def.Func function name: %w", err)
+	}
+
+	var args []string
+	for _, arg := range call.Args[1:] {
+		argSQL, err := buildSetValueExprSQL(pkg, arg, structs, params)
+		if err != nil {
+			return "", err
+		}
+		args = append(args, argSQL)
+	}
+
+	return fmt.Sprintf("%s(%s)", funcName, strings.Join(args, ", ")), nil
 }
 
 // isPostgresReturningCall checks if a call expression is a postgres.Returning() call.

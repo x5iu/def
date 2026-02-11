@@ -481,16 +481,14 @@ func resolveSetColumnName(pkg *Package, set SetExpr) string {
 
 // formatSetValue formats a SetValue for SQL.
 func formatSetValue(value SetValue) string {
+	if value.ExprSQL != "" {
+		return value.ExprSQL
+	}
 	if value.IsParam {
 		return fmt.Sprintf("${%s}", value.ParamName)
 	}
 	if value.IsLiteral {
-		if value.LiteralKind == token.STRING {
-			// Remove Go quotes and add SQL quotes
-			inner := value.LiteralValue[1 : len(value.LiteralValue)-1]
-			return "'" + inner + "'"
-		}
-		return value.LiteralValue
+		return formatLiteral(value.LiteralValue, value.LiteralKind)
 	}
 	return ""
 }
