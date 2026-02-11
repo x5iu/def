@@ -552,6 +552,72 @@ func TestParseSetValueExpressions(t *testing.T) {
 			t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, "now()")
 		}
 	})
+
+	t.Run("preserve right-branch binary semantics", func(t *testing.T) {
+		tests := []struct {
+			name string
+			expr ast.Expr
+			want string
+		}{
+			{
+				name: "multiply with right division",
+				expr: &ast.BinaryExpr{
+					X:  ast.NewIdent("a"),
+					Op: token.MUL,
+					Y: &ast.BinaryExpr{
+						X:  ast.NewIdent("b"),
+						Op: token.QUO,
+						Y:  ast.NewIdent("c"),
+					},
+				},
+				want: "${a} * (${b} / ${c})",
+			},
+			{
+				name: "multiply with right remainder",
+				expr: &ast.BinaryExpr{
+					X:  ast.NewIdent("a"),
+					Op: token.MUL,
+					Y: &ast.BinaryExpr{
+						X:  ast.NewIdent("b"),
+						Op: token.REM,
+						Y:  ast.NewIdent("c"),
+					},
+				},
+				want: "${a} * (${b} % ${c})",
+			},
+			{
+				name: "subtract with right subtraction",
+				expr: &ast.BinaryExpr{
+					X:  ast.NewIdent("a"),
+					Op: token.SUB,
+					Y: &ast.BinaryExpr{
+						X:  ast.NewIdent("b"),
+						Op: token.SUB,
+						Y:  ast.NewIdent("c"),
+					},
+				},
+				want: "${a} - (${b} - ${c})",
+			},
+		}
+
+		params := []ParamInfo{
+			{Name: "a", Type: types.Typ[types.Int64]},
+			{Name: "b", Type: types.Typ[types.Int64]},
+			{Name: "c", Type: types.Typ[types.Int64]},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				value, err := parseSetValue(&Package{}, tt.expr, map[string]*structInfo{}, params)
+				if err != nil {
+					t.Fatalf("parseSetValue() error = %v", err)
+				}
+				if value.ExprSQL != tt.want {
+					t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, tt.want)
+				}
+			})
+		}
+	})
 }
 
 func TestGenerateMutationSQL_UpdateFieldModeExpressions(t *testing.T) {

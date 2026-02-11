@@ -1495,10 +1495,10 @@ func buildSetValueExprSQL(pkg *Package, expr ast.Expr, structs map[string]*struc
 			return "", err
 		}
 
-		if child, ok := e.X.(*ast.BinaryExpr); ok && setExprNeedsParens(child.Op, e.Op, false) {
+		if _, ok := e.X.(*ast.BinaryExpr); ok {
 			left = "(" + left + ")"
 		}
-		if child, ok := e.Y.(*ast.BinaryExpr); ok && setExprNeedsParens(child.Op, e.Op, true) {
+		if _, ok := e.Y.(*ast.BinaryExpr); ok {
 			right = "(" + right + ")"
 		}
 
@@ -1575,21 +1575,6 @@ func setBinaryOp(op token.Token) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-func setExprNeedsParens(childOp, parentOp token.Token, right bool) bool {
-	childPrec := childOp.Precedence()
-	parentPrec := parentOp.Precedence()
-
-	if childPrec < parentPrec {
-		return true
-	}
-	if !right || childPrec != parentPrec {
-		return false
-	}
-
-	// Preserve evaluation order for non-associative operators on the right side.
-	return parentOp == token.SUB || parentOp == token.QUO || parentOp == token.REM
 }
 
 func setCallName(fun ast.Expr) (string, error) {
