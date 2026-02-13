@@ -553,6 +553,37 @@ func TestParseSetValueExpressions(t *testing.T) {
 		}
 	})
 
+	t.Run("def.Func EXCLUDED reference stays bare", func(t *testing.T) {
+		defIdent := ast.NewIdent("def")
+		expr := &ast.CallExpr{
+			Fun: &ast.IndexExpr{
+				X: &ast.SelectorExpr{
+					X:   defIdent,
+					Sel: ast.NewIdent("Func"),
+				},
+				Index: ast.NewIdent("any"),
+			},
+			Args: []ast.Expr{
+				&ast.BasicLit{Kind: token.STRING, Value: `"EXCLUDED.name"`},
+			},
+		}
+		pkg := &Package{
+			TypesInfo: &types.Info{
+				Uses: map[*ast.Ident]types.Object{
+					defIdent: types.NewPkgName(token.NoPos, nil, "def", types.NewPackage(defPkgPath, "def")),
+				},
+			},
+		}
+
+		value, err := parseSetValue(pkg, expr, map[string]*structInfo{}, nil)
+		if err != nil {
+			t.Fatalf("parseSetValue() error = %v", err)
+		}
+		if value.ExprSQL != "EXCLUDED.name" {
+			t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, "EXCLUDED.name")
+		}
+	})
+
 	t.Run("preserve right-branch binary semantics", func(t *testing.T) {
 		tests := []struct {
 			name string
@@ -908,6 +939,159 @@ func TestGenerateMutationSQL(t *testing.T) {
 			},
 			wantErr: true, // Should error because no columns to update
 		},
+		// INSERT with ON CONFLICT tests
+		{
+			name: "insert with ON CONFLICT DO NOTHING",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"Permission": {
+						TypeName:  "Permission",
+						TableName: "role_permissions",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "RoleID", DBName: "role_id"},
+							{GoName: "Resource", DBName: "resource"},
+							{GoName: "Action", DBName: "action"},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:       MethodKindCreate,
+				Name:       "UpsertPermission",
+				TargetType: "Permission",
+				Sets: []SetExpr{
+					{FieldPath: []FieldPathElement{{VarName: "perm", Type: stubType("Permission")}, {FieldName: "RoleID"}}, Value: SetValue{IsParam: true, ParamName: "roleID"}},
+					{FieldPath: []FieldPathElement{{VarName: "perm", Type: stubType("Permission")}, {FieldName: "Resource"}}, Value: SetValue{IsParam: true, ParamName: "resource"}},
+					{FieldPath: []FieldPathElement{{VarName: "perm", Type: stubType("Permission")}, {FieldName: "Action"}}, Value: SetValue{IsParam: true, ParamName: "action"}},
+				},
+				ConflictColumns: []ColumnExpr{
+					{FieldPath: []FieldPathElement{{VarName: "perm", Type: stubType("Permission")}, {FieldName: "RoleID"}}},
+					{FieldPath: []FieldPathElement{{VarName: "perm", Type: stubType("Permission")}, {FieldName: "Resource"}}},
+					{FieldPath: []FieldPathElement{{VarName: "perm", Type: stubType("Permission")}, {FieldName: "Action"}}},
+				},
+				ConflictAction: "nothing",
+			},
+			wantContains: []string{
+				"INSERT INTO role_permissions",
+				"ON CONFLICT (role_id, resource, action) DO NOTHING",
+			},
+			wantNotContain: []string{"RETURNING"},
+		},
+		{
+			name: "insert with ON CONFLICT DO UPDATE SET",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"Role": {
+						TypeName:  "Role",
+						TableName: "roles",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name"},
+							{GoName: "CreatedAt", DBName: "created_at"},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:       MethodKindCreate,
+				Name:       "UpsertRole",
+				TargetType: "Role",
+				Sets: []SetExpr{
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "Name"}}, Value: SetValue{IsParam: true, ParamName: "name"}},
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "CreatedAt"}}, Value: SetValue{ExprSQL: "now()"}},
+				},
+				ConflictColumns: []ColumnExpr{
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "Name"}}},
+				},
+				ConflictAction: "update",
+				ConflictSets: []SetExpr{
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "Name"}}, Value: SetValue{ExprSQL: "EXCLUDED.name"}},
+				},
+			},
+			wantContains: []string{
+				"INSERT INTO roles",
+				"ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name",
+			},
+			wantNotContain: []string{"RETURNING"},
+		},
+		{
+			name: "insert with ON CONFLICT DO UPDATE + RETURNING",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"Role": {
+						TypeName:  "Role",
+						TableName: "roles",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name"},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:       MethodKindCreate,
+				Name:       "UpsertRoleReturning",
+				TargetType: "Role",
+				Sets: []SetExpr{
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "Name"}}, Value: SetValue{IsParam: true, ParamName: "name"}},
+				},
+				ConflictColumns: []ColumnExpr{
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "Name"}}},
+				},
+				ConflictAction: "update",
+				ConflictSets: []SetExpr{
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "Name"}}, Value: SetValue{ExprSQL: "EXCLUDED.name"}},
+				},
+				ReturnType: &MutationReturnType{
+					StructName: "Role",
+				},
+			},
+			wantContains: []string{
+				"INSERT INTO roles",
+				"ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name",
+				"RETURNING *",
+			},
+		},
+		{
+			name: "insert with ON CONFLICT DO NOTHING + RETURNING id",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"Role": {
+						TypeName:  "Role",
+						TableName: "roles",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+							{GoName: "Name", DBName: "name"},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:       MethodKindCreate,
+				Name:       "UpsertRoleReturnID",
+				TargetType: "Role",
+				Sets: []SetExpr{
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "Name"}}, Value: SetValue{IsParam: true, ParamName: "name"}},
+				},
+				ConflictColumns: []ColumnExpr{
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "Name"}}},
+				},
+				ConflictAction: "nothing",
+				ReturnType: &MutationReturnType{
+					IsScalar:   true,
+					StructName: "int64",
+				},
+				ReturningCols: []ColumnExpr{
+					{FieldPath: []FieldPathElement{{VarName: "role", Type: stubType("Role")}, {FieldName: "ID"}}},
+				},
+			},
+			wantContains: []string{
+				"INSERT INTO roles",
+				"ON CONFLICT (name) DO NOTHING",
+				"RETURNING id",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -950,6 +1134,15 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// stubType creates a minimal *types.Named for test FieldPathElement.Type.
+// The returned type has getTypeName() == typeName, so lookupTableByType
+// can resolve it via lookupTableBySimpleName.
+func stubType(typeName string) *types.Named {
+	p := types.NewPackage("example.com/test", "test")
+	obj := types.NewTypeName(token.NoPos, p, typeName, nil)
+	return types.NewNamed(obj, types.NewStruct(nil, nil), nil)
 }
 
 func testUpdateFilters() []*FilterExpr {
@@ -1826,4 +2019,47 @@ func runDefcGenerate(defcCmd, dir, interfaceName, features, inputFile, outputFil
 	}
 
 	return nil
+}
+
+func TestFormatSQL_OnConflict(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "INSERT with ON CONFLICT DO NOTHING",
+			sql:  "INSERT INTO role_permissions (role_id, resource, action) VALUES (${roleID}, ${resource}, ${action}) ON CONFLICT (role_id, resource, action) DO NOTHING",
+			want: "INSERT INTO role_permissions (\n    role_id,\n    resource,\n    action\n) VALUES (\n    ${roleID},\n    ${resource},\n    ${action}\n)\nON CONFLICT (role_id, resource, action) DO NOTHING",
+		},
+		{
+			name: "INSERT with ON CONFLICT DO UPDATE SET",
+			sql:  "INSERT INTO roles (name, created_at) VALUES (${name}, now()) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name",
+			want: "INSERT INTO roles (\n    name,\n    created_at\n) VALUES (\n    ${name},\n    now()\n)\nON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name",
+		},
+		{
+			name: "INSERT with ON CONFLICT DO UPDATE + RETURNING",
+			sql:  "INSERT INTO roles (name) VALUES (${name}) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING *",
+			want: "INSERT INTO roles (\n    name\n) VALUES (\n    ${name}\n)\nON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name\nRETURNING *",
+		},
+		{
+			name: "INSERT with ON CONFLICT DO NOTHING + RETURNING id",
+			sql:  "INSERT INTO roles (name) VALUES (${name}) ON CONFLICT (name) DO NOTHING RETURNING id",
+			want: "INSERT INTO roles (\n    name\n) VALUES (\n    ${name}\n)\nON CONFLICT (name) DO NOTHING\nRETURNING id",
+		},
+		{
+			name: "INSERT literal containing ON CONFLICT text",
+			sql:  "INSERT INTO logs (msg) VALUES ('a ON CONFLICT b')",
+			want: "INSERT INTO logs (\n    msg\n) VALUES (\n    'a ON CONFLICT b'\n)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatSQL(tt.sql)
+			if got != tt.want {
+				t.Errorf("FormatSQL():\n  got:  %q\n  want: %q", got, tt.want)
+			}
+		})
+	}
 }

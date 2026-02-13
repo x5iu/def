@@ -310,10 +310,39 @@ func generateInsertSQL(pkg *Package, method *MutationMethod) (string, error) {
 			strings.Join(values, ", "))
 	}
 
+	// Append ON CONFLICT clause if specified
+	sql += generateOnConflictClause(pkg, method)
+
 	// Append RETURNING clause if needed
 	sql += generateReturningClause(pkg, method)
 
 	return sql, nil
+}
+
+// generateOnConflictClause generates the ON CONFLICT clause for PostgreSQL upsert.
+// Returns empty string if no ON CONFLICT is specified.
+func generateOnConflictClause(pkg *Package, method *MutationMethod) string {
+	if len(method.ConflictColumns) == 0 {
+		return ""
+	}
+
+	cols := buildSelectClause(pkg, method.ConflictColumns)
+
+	switch method.ConflictAction {
+	case "nothing":
+		return fmt.Sprintf(" ON CONFLICT (%s) DO NOTHING", cols)
+	case "update":
+		var setClauses []string
+		for _, set := range method.ConflictSets {
+			colName := resolveSetColumnName(pkg, set)
+			if colName == "" {
+				continue
+			}
+			setClauses = append(setClauses, fmt.Sprintf("%s = %s", colName, formatSetValue(set.Value)))
+		}
+		return fmt.Sprintf(" ON CONFLICT (%s) DO UPDATE SET %s", cols, strings.Join(setClauses, ", "))
+	}
+	return ""
 }
 
 // generateUpdateSQL generates an UPDATE SQL statement.
@@ -609,14 +638,31 @@ func formatInsertSQL(sql string) string {
 	}
 
 	insertPart := sql[:valuesPos]   // "INSERT INTO table (col1, col2, col3)"
-	valuesPart := sql[valuesPos+8:] // "(val1, val2, val3)" or "(val1, val2, val3) RETURNING *"
+	valuesPart := sql[valuesPos+8:] // "(val1, val2, val3)" or "(val1, val2, val3) ON CONFLICT ... RETURNING *"
 
-	// Extract RETURNING clause if present
+	// Extract ON CONFLICT and RETURNING clauses from valuesPart.
+	// Order in raw SQL: VALUES (...) ON CONFLICT (...) DO ... RETURNING ...
+	var onConflictClause string
 	var returningClause string
-	returningPos := strings.Index(valuesPart, " RETURNING ")
-	if returningPos != -1 {
-		returningClause = valuesPart[returningPos:] // " RETURNING *" or " RETURNING id, name"
-		valuesPart = valuesPart[:returningPos]      // "(val1, val2, val3)"
+
+	onConflictPos := findKeywordOutsideSubquery(valuesPart, " ON CONFLICT ")
+	if onConflictPos != -1 {
+		onConflictClause = valuesPart[onConflictPos:]
+		valuesPart = valuesPart[:onConflictPos]
+
+		// Extract RETURNING from the ON CONFLICT tail
+		returningPos := findKeywordOutsideSubquery(onConflictClause, " RETURNING ")
+		if returningPos != -1 {
+			returningClause = onConflictClause[returningPos:]
+			onConflictClause = onConflictClause[:returningPos]
+		}
+	} else {
+		// No ON CONFLICT — check for RETURNING directly
+		returningPos := findKeywordOutsideSubquery(valuesPart, " RETURNING ")
+		if returningPos != -1 {
+			returningClause = valuesPart[returningPos:]
+			valuesPart = valuesPart[:returningPos]
+		}
 	}
 
 	// Parse columns from insertPart
@@ -655,6 +701,12 @@ func formatInsertSQL(sql string) string {
 		result.WriteString("\n")
 	}
 	result.WriteString(")")
+
+	// Append ON CONFLICT clause if present
+	if onConflictClause != "" {
+		result.WriteString("\n")
+		result.WriteString(strings.TrimSpace(onConflictClause))
+	}
 
 	// Append RETURNING clause if present
 	if returningClause != "" {
@@ -888,11 +940,28 @@ func splitConditions(condition string) []conditionPart {
 	return parts
 }
 
-// findKeywordOutsideSubquery finds a keyword position that is not inside a subquery.
+// findKeywordOutsideSubquery finds a keyword position that is not inside a
+// parenthesized expression or SQL string literal.
 func findKeywordOutsideSubquery(sql, keyword string) int {
 	depth := 0
+	inSingleQuote := false
+
 	for i := 0; i < len(sql); i++ {
-		if sql[i] == '(' {
+		if inSingleQuote {
+			if sql[i] == '\'' {
+				// SQL single-quote escaping: '' within a string literal.
+				if i+1 < len(sql) && sql[i+1] == '\'' {
+					i++
+				} else {
+					inSingleQuote = false
+				}
+			}
+			continue
+		}
+
+		if sql[i] == '\'' {
+			inSingleQuote = true
+		} else if sql[i] == '(' {
 			depth++
 		} else if sql[i] == ')' {
 			depth--

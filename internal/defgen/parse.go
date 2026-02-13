@@ -1106,14 +1106,17 @@ func parseMutationMethod(pkg *Package, fn *ast.FuncDecl, kind MethodKind, mutati
 	// Parse mutation-specific arguments
 	switch kind {
 	case MethodKindCreate:
-		targetType, sets, entityParam, returningCols, err := parseCreateArgs(pkg, mutationCall, structs, method.Params)
+		createResult, err := parseCreateArgs(pkg, mutationCall, structs, method.Params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Create args: %w", err)
 		}
-		method.TargetType = targetType
-		method.Sets = sets
-		method.EntityParam = entityParam
-		method.ReturningCols = returningCols
+		method.TargetType = createResult.TargetType
+		method.Sets = createResult.Sets
+		method.EntityParam = createResult.EntityParam
+		method.ReturningCols = createResult.ReturningCols
+		method.ConflictColumns = createResult.ConflictColumns
+		method.ConflictAction = createResult.ConflictAction
+		method.ConflictSets = createResult.ConflictSets
 
 	case MethodKindUpdate:
 		targetType, sets, filters, entityParam, returningCols, err := parseUpdateArgs(pkg, mutationCall, structs, method.Params)
@@ -1139,22 +1142,29 @@ func parseMutationMethod(pkg *Package, fn *ast.FuncDecl, kind MethodKind, mutati
 	return method, nil
 }
 
+// createArgsResult holds the parsed results of def.Create() arguments.
+type createArgsResult struct {
+	TargetType      string
+	Sets            []SetExpr
+	EntityParam     *ParamInfo
+	ReturningCols   []ColumnExpr
+	ConflictColumns []ColumnExpr
+	ConflictAction  string
+	ConflictSets    []SetExpr
+}
+
 // parseCreateArgs parses arguments for def.Create().
-// Returns (targetType, sets, entityParam, returningCols, error).
-func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, *ParamInfo, []ColumnExpr, error) {
+func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (*createArgsResult, error) {
 	if len(call.Args) == 0 {
-		return "", nil, nil, nil, fmt.Errorf("def.Create requires at least 1 argument")
+		return nil, fmt.Errorf("def.Create requires at least 1 argument")
 	}
 
-	var returningCols []ColumnExpr
+	result := &createArgsResult{}
 
 	// Check if first argument is a def.Set call (field mode) or an identifier (entity mode)
 	firstArg := call.Args[0]
 	if setCall, ok := firstArg.(*ast.CallExpr); ok && isDefCall(pkg, setCall, "Set") {
-		// Field mode: def.Create(def.Set(...), def.Set(...), postgres.Returning(...))
-		var sets []SetExpr
-		var targetType string
-
+		// Field mode: def.Create(def.Set(...), def.Set(...), postgres.Returning(...), postgres.OnConflict(...).DoXxx())
 		for _, arg := range call.Args {
 			argCall, ok := arg.(*ast.CallExpr)
 			if !ok {
@@ -1165,9 +1175,21 @@ func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 			if isPostgresReturningCall(pkg, argCall) {
 				cols, err := parseReturningColumns(pkg, argCall, structs, params)
 				if err != nil {
-					return "", nil, nil, nil, err
+					return nil, err
 				}
-				returningCols = cols
+				result.ReturningCols = cols
+				continue
+			}
+
+			// Check for postgres.OnConflict(...).DoNothing()/DoUpdate(...)
+			if innerCall, action, ok := isPostgresOnConflictDoCall(pkg, argCall); ok {
+				cols, sets, err := parseOnConflictExpr(pkg, argCall, innerCall, action, structs, params)
+				if err != nil {
+					return nil, err
+				}
+				result.ConflictColumns = cols
+				result.ConflictAction = action
+				result.ConflictSets = sets
 				continue
 			}
 
@@ -1177,27 +1199,27 @@ func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 
 			setExpr, err := parseSetExpr(pkg, argCall, structs, params)
 			if err != nil {
-				return "", nil, nil, nil, err
+				return nil, err
 			}
 
 			// Determine target type from the first Set's field path
-			if targetType == "" && len(setExpr.FieldPath) > 0 {
-				targetType = getTypeKey(setExpr.FieldPath[0].Type)
+			if result.TargetType == "" && len(setExpr.FieldPath) > 0 {
+				result.TargetType = getTypeKey(setExpr.FieldPath[0].Type)
 			}
 
-			sets = append(sets, setExpr)
+			result.Sets = append(result.Sets, setExpr)
 		}
 
-		return targetType, sets, nil, returningCols, nil
+		return result, nil
 	}
 
 	// Entity mode: def.Create(user) or def.Create(user, postgres.Returning())
 	ident, ok := firstArg.(*ast.Ident)
 	if !ok {
-		return "", nil, nil, nil, fmt.Errorf("def.Create in entity mode requires an identifier")
+		return nil, fmt.Errorf("def.Create in entity mode requires an identifier")
 	}
 
-	// Check for additional arguments (postgres.Returning())
+	// Check for additional arguments (postgres.Returning(), postgres.OnConflict()...)
 	for _, arg := range call.Args[1:] {
 		argCall, ok := arg.(*ast.CallExpr)
 		if !ok {
@@ -1206,21 +1228,32 @@ func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 		if isPostgresReturningCall(pkg, argCall) {
 			cols, err := parseReturningColumns(pkg, argCall, structs, params)
 			if err != nil {
-				return "", nil, nil, nil, err
+				return nil, err
 			}
-			returningCols = cols
+			result.ReturningCols = cols
+			continue
+		}
+		if innerCall, action, ok := isPostgresOnConflictDoCall(pkg, argCall); ok {
+			cols, sets, err := parseOnConflictExpr(pkg, argCall, innerCall, action, structs, params)
+			if err != nil {
+				return nil, err
+			}
+			result.ConflictColumns = cols
+			result.ConflictAction = action
+			result.ConflictSets = sets
 		}
 	}
 
 	// Find the parameter
 	for i := range params {
 		if params[i].Name == ident.Name {
-			targetType := getTypeKey(params[i].Type)
-			return targetType, nil, &params[i], returningCols, nil
+			result.TargetType = getTypeKey(params[i].Type)
+			result.EntityParam = &params[i]
+			return result, nil
 		}
 	}
 
-	return "", nil, nil, nil, fmt.Errorf("unknown identifier in Create: %s", ident.Name)
+	return nil, fmt.Errorf("unknown identifier in Create: %s", ident.Name)
 }
 
 // parseUpdateArgs parses arguments for def.Update().
@@ -1620,6 +1653,12 @@ func buildSetDefFuncSQL(pkg *Package, call *ast.CallExpr, structs map[string]*st
 		args = append(args, argSQL)
 	}
 
+	// Allow documented upsert pattern: def.Func("EXCLUDED.col") -> EXCLUDED.col
+	// (without function-call parentheses).
+	if len(args) == 0 && strings.HasPrefix(strings.ToUpper(funcName), "EXCLUDED.") {
+		return funcName, nil
+	}
+
 	return fmt.Sprintf("%s(%s)", funcName, strings.Join(args, ", ")), nil
 }
 
@@ -1650,6 +1689,121 @@ func isPostgresReturningCall(pkg *Package, call *ast.CallExpr) bool {
 	}
 
 	return pkgName.Imported().Path() == postgresPkgPath
+}
+
+// isPostgresOnConflictDoCall checks if a call expression is a
+// postgres.OnConflict(...).DoNothing() or postgres.OnConflict(...).DoUpdate(...) call.
+// Returns (innerOnConflictCall, action, ok) where action is "nothing" or "update".
+//
+// AST structure:
+//
+//	CallExpr {                          // .DoNothing() or .DoUpdate(sets...)
+//	    Fun: SelectorExpr {
+//	        X: CallExpr {               // postgres.OnConflict(cols...)
+//	            Fun: SelectorExpr {
+//	                X: Ident("postgres")
+//	                Sel: "OnConflict"
+//	            }
+//	            Args: [col1, col2, ...]
+//	        }
+//	        Sel: "DoNothing" | "DoUpdate"
+//	    }
+//	    Args: [] | [set1, set2, ...]
+//	}
+func isPostgresOnConflictDoCall(pkg *Package, call *ast.CallExpr) (*ast.CallExpr, string, bool) {
+	// Outer call's Fun must be a SelectorExpr (e.g., .DoNothing() or .DoUpdate())
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil, "", false
+	}
+
+	var action string
+	switch sel.Sel.Name {
+	case "DoNothing":
+		action = "nothing"
+	case "DoUpdate":
+		action = "update"
+	default:
+		return nil, "", false
+	}
+
+	// SelectorExpr.X must be a CallExpr (the postgres.OnConflict(...) call)
+	innerCall, ok := sel.X.(*ast.CallExpr)
+	if !ok {
+		return nil, "", false
+	}
+
+	// Verify it's postgres.OnConflict
+	innerSel, ok := innerCall.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil, "", false
+	}
+	if innerSel.Sel.Name != "OnConflict" {
+		return nil, "", false
+	}
+
+	ident, ok := innerSel.X.(*ast.Ident)
+	if !ok {
+		return nil, "", false
+	}
+
+	obj := pkg.TypesInfo.Uses[ident]
+	if obj == nil {
+		return nil, "", false
+	}
+
+	pkgName, ok := obj.(*types.PkgName)
+	if !ok {
+		return nil, "", false
+	}
+
+	if pkgName.Imported().Path() != postgresPkgPath {
+		return nil, "", false
+	}
+
+	return innerCall, action, true
+}
+
+// parseOnConflictExpr parses a postgres.OnConflict(...).DoNothing()/DoUpdate(...) expression.
+// outerCall is the full .DoNothing()/.DoUpdate() call, innerCall is the OnConflict(...) call.
+func parseOnConflictExpr(pkg *Package, outerCall *ast.CallExpr, innerCall *ast.CallExpr, action string, structs map[string]*structInfo, params []ParamInfo) ([]ColumnExpr, []SetExpr, error) {
+	// Parse conflict target columns from innerCall args
+	var columns []ColumnExpr
+	for _, arg := range innerCall.Args {
+		col, err := parseColumnExpr(pkg, arg, structs, params)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to parse OnConflict column: %w", err)
+		}
+		columns = append(columns, col)
+	}
+
+	if len(columns) == 0 {
+		return nil, nil, fmt.Errorf("postgres.OnConflict requires at least 1 column argument")
+	}
+
+	// For DoUpdate, parse SET expressions from outerCall args
+	var sets []SetExpr
+	if action == "update" {
+		for _, arg := range outerCall.Args {
+			argCall, ok := arg.(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			if !isDefCall(pkg, argCall, "Set") {
+				continue
+			}
+			setExpr, err := parseSetExpr(pkg, argCall, structs, params)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to parse DoUpdate Set: %w", err)
+			}
+			sets = append(sets, setExpr)
+		}
+		if len(sets) == 0 {
+			return nil, nil, fmt.Errorf("postgres.OnConflict().DoUpdate requires at least 1 def.Set argument")
+		}
+	}
+
+	return columns, sets, nil
 }
 
 // isSqlResultType checks if a type is database/sql.Result.

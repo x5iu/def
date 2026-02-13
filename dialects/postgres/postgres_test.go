@@ -10,3 +10,13 @@ func TestReturningPlaceholder(t *testing.T) {
 		t.Fatalf("Returning(columns...) should return nil placeholder")
 	}
 }
+
+func TestOnConflictPlaceholder(t *testing.T) {
+	ct := OnConflict("id")
+	if ct.DoNothing() != nil {
+		t.Fatalf("DoNothing() should return nil placeholder")
+	}
+	if ct.DoUpdate("x") != nil {
+		t.Fatalf("DoUpdate() should return nil placeholder")
+	}
+}

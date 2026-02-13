@@ -21,3 +21,47 @@ package postgres
 //	    return def.Create(def.Set(user.Name, name), postgres.Returning(user.ID, user.CreatedAt))
 //	}
 func Returning(columns ...any) any { return nil }
+
+// ConflictTarget represents an ON CONFLICT target for PostgreSQL upsert operations.
+// It is returned by [OnConflict] and provides [ConflictTarget.DoNothing] and
+// [ConflictTarget.DoUpdate] methods to specify the conflict resolution action.
+type ConflictTarget struct{}
+
+// OnConflict specifies conflict target columns for a PostgreSQL ON CONFLICT clause.
+// Use with [ConflictTarget.DoNothing] or [ConflictTarget.DoUpdate] to define the
+// conflict resolution action.
+//
+// Example usage:
+//
+//	// ON CONFLICT (role_id, resource, action) DO NOTHING
+//	func (r *Repo) UpsertPermission(ctx context.Context, roleID int64, resource, action string) (sql.Result, error) {
+//	    return def.Create(
+//	        def.Set(perm.RoleID, roleID),
+//	        def.Set(perm.Resource, resource),
+//	        def.Set(perm.Action, action),
+//	        postgres.OnConflict(perm.RoleID, perm.Resource, perm.Action).DoNothing(),
+//	    )
+//	}
+//
+//	// ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+//	func (r *Repo) UpsertRole(ctx context.Context, name string) (role *Role, err error) {
+//	    return def.Create(
+//	        def.Set(role.Name, name),
+//	        def.Set(role.CreatedAt, def.Func[any]("now")),
+//	        postgres.OnConflict(role.Name).DoUpdate(
+//	            def.Set(role.Name, def.Func[any]("EXCLUDED.name")),
+//	        ),
+//	        postgres.Returning(),
+//	    )
+//	}
+func OnConflict(columns ...any) ConflictTarget { return ConflictTarget{} }
+
+// DoNothing generates ON CONFLICT (...) DO NOTHING.
+// The insert is silently skipped when a conflict occurs on the target columns.
+func (ConflictTarget) DoNothing() any { return nil }
+
+// DoUpdate generates ON CONFLICT (...) DO UPDATE SET ...
+// Arguments should be def.Set() expressions specifying columns to update when a
+// conflict occurs. Use def.Func[any]("EXCLUDED.column_name") to reference the
+// would-be inserted value.
+func (ConflictTarget) DoUpdate(sets ...any) any { return nil }

@@ -178,6 +178,11 @@ type MutationMethod struct {
 	Pos           token.Pos           // Position in source
 	ReturnType    *MutationReturnType // Return type info (nil means sql.Result)
 	ReturningCols []ColumnExpr        // postgres.Returning() specified columns (empty with ReturnType means RETURNING *)
+
+	// PostgreSQL ON CONFLICT support
+	ConflictColumns []ColumnExpr // ON CONFLICT (col1, col2) target columns
+	ConflictAction  string       // "nothing" or "update"
+	ConflictSets    []SetExpr    // DO UPDATE SET assignments (only when ConflictAction == "update")
 }
 
 // MutationReturnType represents the return type of a mutation method.
