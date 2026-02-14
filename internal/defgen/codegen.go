@@ -756,8 +756,8 @@ func invokeDefc(intermediateFile string, intermediateCode []byte, pkg *Package, 
 	if features != "" {
 		feats = strings.Split(features, ",")
 	}
-	// Align invokeDefc with defc CLI default behavior (since defc v1.37.0),
-	// where sqlx/future is enabled unless defc itself is built with `legacy`.
+	// Align invokeDefc with defc CLI default behavior (since defc v1.37.0):
+	// include sqlx/future unless explicitly disabled by callers.
 	if !containsFeature(feats, "sqlx/future") {
 		feats = append(feats, "sqlx/future")
 	}

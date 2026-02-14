@@ -107,24 +107,17 @@ func typeStringForLookup(t types.Type) string {
 // lookupTableByType resolves a table binding from a concrete type.
 func lookupTableByType(pkg *Package, t types.Type) (*TableBinding, error) {
 	key := getTypeKey(t)
-	if key != "" {
-		if binding, ok := pkg.Tables[key]; ok {
-			return binding, nil
-		}
+	if key == "" {
+		return nil, fmt.Errorf("table binding not found for type %s", typeStringForLookup(t))
 	}
-
-	name := getTypeName(t)
-	if name != "" {
-		binding, err := lookupTableBySimpleName(pkg, name)
-		if err == nil {
-			return binding, nil
-		}
+	if binding, ok := pkg.Tables[key]; ok {
+		return binding, nil
 	}
 
 	return nil, fmt.Errorf("table binding not found for type %s", typeStringForLookup(t))
 }
 
-// lookupTableByTargetType resolves a target type key (or legacy simple name) to a table binding.
+// lookupTableByTargetType resolves a target type key to a table binding.
 func lookupTableByTargetType(pkg *Package, targetType string) (*TableBinding, error) {
 	if targetType == "" {
 		return nil, fmt.Errorf("empty target type")
@@ -132,24 +125,7 @@ func lookupTableByTargetType(pkg *Package, targetType string) (*TableBinding, er
 	if binding, ok := pkg.Tables[targetType]; ok {
 		return binding, nil
 	}
-	return lookupTableBySimpleName(pkg, targetType)
-}
-
-func lookupTableBySimpleName(pkg *Package, typeName string) (*TableBinding, error) {
-	var matched *TableBinding
-	for _, binding := range pkg.Tables {
-		if binding.TypeName != typeName {
-			continue
-		}
-		if matched != nil {
-			return nil, fmt.Errorf("ambiguous type name %q across multiple packages", typeName)
-		}
-		matched = binding
-	}
-	if matched == nil {
-		return nil, fmt.Errorf("table binding not found for type name %q", typeName)
-	}
-	return matched, nil
+	return nil, fmt.Errorf("table binding not found for target type %q", targetType)
 }
 
 // parseAllStructs scans the package and collects all struct definitions with their tags.

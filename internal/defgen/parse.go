@@ -561,29 +561,27 @@ func parseColumnExpr(pkg *Package, expr ast.Expr, structs map[string]*structInfo
 
 	// Check if it's a function call (aggregate or custom function)
 	if call, ok := expr.(*ast.CallExpr); ok {
-		// Check for built-in aggregate functions: def.Count, def.Sum, def.Avg, def.Max, def.Min
-		if isDefCall(pkg, call, "Count") || isDefCall(pkg, call, "Sum") ||
-			isDefCall(pkg, call, "Avg") || isDefCall(pkg, call, "Max") || isDefCall(pkg, call, "Min") {
-			funcName := getDefFuncName(call)
-			if len(call.Args) != 1 {
-				return col, fmt.Errorf("%s requires 1 argument", funcName)
+		if funcName, ok := isGenericDefCall(pkg, call); ok {
+			switch funcName {
+			case "Count", "Sum", "Avg", "Max", "Min":
+				if len(call.Args) != 1 {
+					return col, fmt.Errorf("%s requires 1 argument", funcName)
+				}
+
+				// Parse the field argument
+				fieldPath, err := parseFieldPathFromExpr(pkg, call.Args[0], structs)
+				if err != nil {
+					return col, fmt.Errorf("failed to parse %s argument: %w", funcName, err)
+				}
+
+				col.IsFunc = true
+				col.FuncName = strings.ToUpper(funcName)
+				col.FuncArgs = []FuncArg{{IsField: true, FieldPath: fieldPath}}
+				return col, nil
+
+			case "Func":
+				return parseFuncExpr(pkg, call, structs, params)
 			}
-
-			// Parse the field argument
-			fieldPath, err := parseFieldPathFromExpr(pkg, call.Args[0], structs)
-			if err != nil {
-				return col, fmt.Errorf("failed to parse %s argument: %w", funcName, err)
-			}
-
-			col.IsFunc = true
-			col.FuncName = strings.ToUpper(funcName)
-			col.FuncArgs = []FuncArg{{IsField: true, FieldPath: fieldPath}}
-			return col, nil
-		}
-
-		// Check for def.Func custom function
-		if isDefCall(pkg, call, "Func") {
-			return parseFuncExpr(pkg, call, structs, params)
 		}
 	}
 
@@ -601,7 +599,7 @@ func parseColumnExpr(pkg *Package, expr ast.Expr, structs map[string]*structInfo
 	return col, fmt.Errorf("unsupported column expression type: %T", expr)
 }
 
-// parseFuncExpr parses a def.Func("name", args...) call.
+// parseFuncExpr parses a generic def.Func[T]("name", args...) call.
 func parseFuncExpr(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (ColumnExpr, error) {
 	col := ColumnExpr{IsFunc: true}
 
@@ -664,14 +662,6 @@ func parseFuncArg(pkg *Package, expr ast.Expr, structs map[string]*structInfo, p
 	default:
 		return arg, fmt.Errorf("unsupported function argument type: %T", expr)
 	}
-}
-
-// getDefFuncName extracts the function name from a def.X() call.
-func getDefFuncName(call *ast.CallExpr) string {
-	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-		return sel.Sel.Name
-	}
-	return ""
 }
 
 // parseFieldPathFromExpr parses a field path from any expression.
@@ -1567,9 +1557,6 @@ func buildSetValueExprSQL(pkg *Package, expr ast.Expr, structs map[string]*struc
 		return formatLiteral(e.Value, e.Kind), nil
 
 	case *ast.CallExpr:
-		if isDefCall(pkg, e, "Func") {
-			return buildSetDefFuncSQL(pkg, e, structs, params)
-		}
 		if funcName, ok := isGenericDefCall(pkg, e); ok && funcName == "Func" {
 			return buildSetDefFuncSQL(pkg, e, structs, params)
 		}
@@ -1662,10 +1649,6 @@ func buildSetDefFuncSQL(pkg *Package, call *ast.CallExpr, structs map[string]*st
 	funcName, err := strconv.Unquote(nameLit.Value)
 	if err != nil {
 		return "", fmt.Errorf("invalid def.Func function name: %w", err)
-	}
-	// Preview breaking change: legacy EXCLUDED passthrough now requires postgres.Excluded(field).
-	if len(call.Args) == 1 && strings.HasPrefix(funcName, "EXCLUDED.") {
-		return "", fmt.Errorf("def.Func(\"EXCLUDED.<column>\") is no longer supported; use postgres.Excluded(<field>)")
 	}
 
 	var args []string

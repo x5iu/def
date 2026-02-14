@@ -96,8 +96,6 @@ func (r *Repo) UpsertRole(ctx context.Context, name string) (role *Role, err err
 
 References a column from PostgreSQL's `EXCLUDED` pseudo-table in an `ON CONFLICT DO UPDATE SET` clause. The argument should be a struct field expression identifying the column.
 
-Preview breaking change: legacy `def.Func("EXCLUDED.column")` is no longer supported. Use `postgres.Excluded(field)` instead.
-
 ```go
 // In DoUpdate: SET name = EXCLUDED.name
 postgres.OnConflict(role.Name).DoUpdate(

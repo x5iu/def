@@ -171,7 +171,7 @@ type MutationMethod struct {
 	Params        []ParamInfo         // Method parameters
 	ParamTypes    []types.Type        // All parameter types in declaration order (including context.Context)
 	ResultTypes   []types.Type        // All result types in declaration order
-	TargetType    string              // Target type key (pkgpath.Type) or legacy simple type name
+	TargetType    string              // Target type key (pkgpath.Type)
 	Sets          []SetExpr           // SET expressions for Create/Update
 	Filters       []*FilterExpr       // WHERE conditions for Update/Delete
 	EntityParam   *ParamInfo          // Entity parameter for Create/Update entity mode

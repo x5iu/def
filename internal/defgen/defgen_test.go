@@ -525,12 +525,15 @@ func TestParseSetValueExpressions(t *testing.T) {
 		}
 	})
 
-	t.Run("def.Func call", func(t *testing.T) {
+	t.Run("generic def.Func call", func(t *testing.T) {
 		defIdent := ast.NewIdent("def")
 		expr := &ast.CallExpr{
-			Fun: &ast.SelectorExpr{
-				X:   defIdent,
-				Sel: ast.NewIdent("Func"),
+			Fun: &ast.IndexExpr{
+				X: &ast.SelectorExpr{
+					X:   defIdent,
+					Sel: ast.NewIdent("Func"),
+				},
+				Index: ast.NewIdent("any"),
 			},
 			Args: []ast.Expr{
 				&ast.BasicLit{Kind: token.STRING, Value: `"now"`},
@@ -550,37 +553,6 @@ func TestParseSetValueExpressions(t *testing.T) {
 		}
 		if value.ExprSQL != "now()" {
 			t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, "now()")
-		}
-	})
-
-	t.Run("legacy def.Func EXCLUDED syntax returns migration error", func(t *testing.T) {
-		defIdent := ast.NewIdent("def")
-		expr := &ast.CallExpr{
-			Fun: &ast.IndexExpr{
-				X: &ast.SelectorExpr{
-					X:   defIdent,
-					Sel: ast.NewIdent("Func"),
-				},
-				Index: ast.NewIdent("any"),
-			},
-			Args: []ast.Expr{
-				&ast.BasicLit{Kind: token.STRING, Value: `"EXCLUDED.name"`},
-			},
-		}
-		pkg := &Package{
-			TypesInfo: &types.Info{
-				Uses: map[*ast.Ident]types.Object{
-					defIdent: types.NewPkgName(token.NoPos, nil, "def", types.NewPackage(defPkgPath, "def")),
-				},
-			},
-		}
-
-		_, err := parseSetValue(pkg, expr, map[string]*structInfo{}, nil)
-		if err == nil {
-			t.Fatalf("parseSetValue() error = nil, want migration error")
-		}
-		if !strings.Contains(err.Error(), `def.Func("EXCLUDED.<column>") is no longer supported`) {
-			t.Fatalf("parseSetValue() error = %q, want migration hint", err.Error())
 		}
 	})
 
@@ -1181,11 +1153,9 @@ func containsHelper(s, substr string) bool {
 }
 
 // stubType creates a minimal *types.Named for test FieldPathElement.Type.
-// The returned type has getTypeName() == typeName, so lookupTableByType
-// can resolve it via lookupTableBySimpleName.
+// It uses a nil package so getTypeKey() resolves to the plain type name.
 func stubType(typeName string) *types.Named {
-	p := types.NewPackage("example.com/test", "test")
-	obj := types.NewTypeName(token.NoPos, p, typeName, nil)
+	obj := types.NewTypeName(token.NoPos, nil, typeName, nil)
 	return types.NewNamed(obj, types.NewStruct(nil, nil), nil)
 }
 
@@ -1404,9 +1374,6 @@ func TestLookupTableByType_CrossPackageBindTable(t *testing.T) {
 		t.Fatalf("lookupTableByType(userB) = %s, want users_b", gotB.TableName)
 	}
 
-	if _, err := lookupTableBySimpleName(pkg, "User"); err == nil {
-		t.Fatalf("lookupTableBySimpleName(User) should fail on ambiguity")
-	}
 }
 
 func TestSplitConditions_IgnoreQuotedAndOr(t *testing.T) {

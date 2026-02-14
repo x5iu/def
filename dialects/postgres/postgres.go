@@ -67,8 +67,7 @@ func (ConflictTarget) DoUpdate(sets ...any) any { return nil }
 
 // Excluded references a column from PostgreSQL's EXCLUDED pseudo-table in an
 // ON CONFLICT DO UPDATE SET clause. The argument should be a struct field
-// expression identifying the column. Preview breaking change:
-// def.Func("EXCLUDED.column") is no longer supported.
+// expression identifying the column.
 //
 // Example:
 //
