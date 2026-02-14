@@ -1574,6 +1574,26 @@ func buildSetValueExprSQL(pkg *Package, expr ast.Expr, structs map[string]*struc
 			return buildSetDefFuncSQL(pkg, e, structs, params)
 		}
 
+		// postgres.Excluded(field) -> "EXCLUDED.column_name"
+		if isPostgresExcludedCall(pkg, e) {
+			if len(e.Args) != 1 {
+				return "", fmt.Errorf("postgres.Excluded requires exactly 1 argument")
+			}
+			sel, ok := e.Args[0].(*ast.SelectorExpr)
+			if !ok {
+				return "", fmt.Errorf("postgres.Excluded argument must be a field expression (e.g., role.Name)")
+			}
+			fieldPath, err := parseFieldPath(pkg, sel, structs)
+			if err != nil {
+				return "", fmt.Errorf("failed to parse postgres.Excluded field: %w", err)
+			}
+			colName := resolveColumnNameFromPath(pkg, fieldPath)
+			if colName == "" {
+				return "", fmt.Errorf("failed to resolve column name for postgres.Excluded")
+			}
+			return "EXCLUDED." + colName, nil
+		}
+
 		funcName, err := setCallName(e.Fun)
 		if err != nil {
 			return "", err
@@ -1643,6 +1663,10 @@ func buildSetDefFuncSQL(pkg *Package, call *ast.CallExpr, structs map[string]*st
 	if err != nil {
 		return "", fmt.Errorf("invalid def.Func function name: %w", err)
 	}
+	// Preview breaking change: legacy EXCLUDED passthrough now requires postgres.Excluded(field).
+	if len(call.Args) == 1 && strings.HasPrefix(funcName, "EXCLUDED.") {
+		return "", fmt.Errorf("def.Func(\"EXCLUDED.<column>\") is no longer supported; use postgres.Excluded(<field>)")
+	}
 
 	var args []string
 	for _, arg := range call.Args[1:] {
@@ -1651,12 +1675,6 @@ func buildSetDefFuncSQL(pkg *Package, call *ast.CallExpr, structs map[string]*st
 			return "", err
 		}
 		args = append(args, argSQL)
-	}
-
-	// Allow documented upsert pattern: def.Func("EXCLUDED.col") -> EXCLUDED.col
-	// (without function-call parentheses).
-	if len(args) == 0 && strings.HasPrefix(strings.ToUpper(funcName), "EXCLUDED.") {
-		return funcName, nil
 	}
 
 	return fmt.Sprintf("%s(%s)", funcName, strings.Join(args, ", ")), nil
@@ -1670,6 +1688,35 @@ func isPostgresReturningCall(pkg *Package, call *ast.CallExpr) bool {
 	}
 
 	if sel.Sel.Name != "Returning" {
+		return false
+	}
+
+	ident, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+
+	obj := pkg.TypesInfo.Uses[ident]
+	if obj == nil {
+		return false
+	}
+
+	pkgName, ok := obj.(*types.PkgName)
+	if !ok {
+		return false
+	}
+
+	return pkgName.Imported().Path() == postgresPkgPath
+}
+
+// isPostgresExcludedCall checks if a call expression is a postgres.Excluded() call.
+func isPostgresExcludedCall(pkg *Package, call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+
+	if sel.Sel.Name != "Excluded" {
 		return false
 	}
 

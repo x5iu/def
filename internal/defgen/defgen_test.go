@@ -553,7 +553,7 @@ func TestParseSetValueExpressions(t *testing.T) {
 		}
 	})
 
-	t.Run("def.Func EXCLUDED reference stays bare", func(t *testing.T) {
+	t.Run("legacy def.Func EXCLUDED syntax returns migration error", func(t *testing.T) {
 		defIdent := ast.NewIdent("def")
 		expr := &ast.CallExpr{
 			Fun: &ast.IndexExpr{
@@ -571,6 +571,50 @@ func TestParseSetValueExpressions(t *testing.T) {
 			TypesInfo: &types.Info{
 				Uses: map[*ast.Ident]types.Object{
 					defIdent: types.NewPkgName(token.NoPos, nil, "def", types.NewPackage(defPkgPath, "def")),
+				},
+			},
+		}
+
+		_, err := parseSetValue(pkg, expr, map[string]*structInfo{}, nil)
+		if err == nil {
+			t.Fatalf("parseSetValue() error = nil, want migration error")
+		}
+		if !strings.Contains(err.Error(), `def.Func("EXCLUDED.<column>") is no longer supported`) {
+			t.Fatalf("parseSetValue() error = %q, want migration hint", err.Error())
+		}
+	})
+
+	t.Run("postgres.Excluded generates EXCLUDED.column", func(t *testing.T) {
+		pgIdent := ast.NewIdent("postgres")
+		roleIdent := ast.NewIdent("role")
+		expr := &ast.CallExpr{
+			Fun: &ast.SelectorExpr{
+				X:   pgIdent,
+				Sel: ast.NewIdent("Excluded"),
+			},
+			Args: []ast.Expr{
+				&ast.SelectorExpr{
+					X:   roleIdent,
+					Sel: ast.NewIdent("Name"),
+				},
+			},
+		}
+
+		roleType := stubType("Role")
+		pkg := &Package{
+			TypesInfo: &types.Info{
+				Uses: map[*ast.Ident]types.Object{
+					pgIdent:   types.NewPkgName(token.NoPos, nil, "postgres", types.NewPackage(postgresPkgPath, "postgres")),
+					roleIdent: types.NewVar(token.NoPos, nil, "role", types.NewPointer(roleType)),
+				},
+			},
+			Tables: map[string]*TableBinding{
+				"Role": {
+					TypeName:  "Role",
+					TableName: "roles",
+					Fields: []FieldInfo{
+						{GoName: "Name", DBName: "name"},
+					},
 				},
 			},
 		}

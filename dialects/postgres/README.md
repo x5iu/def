@@ -72,7 +72,7 @@ func (r *Repo) UpsertPermission(ctx context.Context, roleID int64, resource, act
 
 Generates `ON CONFLICT (...) DO UPDATE SET ...`. Arguments must be `def.Set()` expressions specifying columns to update when a conflict occurs.
 
-Use `def.Func[any]("EXCLUDED.column_name")` to reference the would-be inserted value in the `SET` clause.
+Use `postgres.Excluded(field)` to reference the would-be inserted value in the `SET` clause (see [Excluded](#excluded)).
 
 ```go
 // INSERT INTO roles (name, created_at) VALUES (...)
@@ -83,11 +83,26 @@ func (r *Repo) UpsertRole(ctx context.Context, name string) (role *Role, err err
         def.Set(role.Name, name),
         def.Set(role.CreatedAt, def.Func[any]("now")),
         postgres.OnConflict(role.Name).DoUpdate(
-            def.Set(role.Name, def.Func[any]("EXCLUDED.name")),
+            def.Set(role.Name, postgres.Excluded(role.Name)),
         ),
         postgres.Returning(),
     )
 }
+```
+
+### Excluded
+
+`Excluded(column any) any`
+
+References a column from PostgreSQL's `EXCLUDED` pseudo-table in an `ON CONFLICT DO UPDATE SET` clause. The argument should be a struct field expression identifying the column.
+
+Preview breaking change: legacy `def.Func("EXCLUDED.column")` is no longer supported. Use `postgres.Excluded(field)` instead.
+
+```go
+// In DoUpdate: SET name = EXCLUDED.name
+postgres.OnConflict(role.Name).DoUpdate(
+    def.Set(role.Name, postgres.Excluded(role.Name)),
+)
 ```
 
 ### Combining OnConflict with Returning
@@ -103,7 +118,7 @@ func (r *Repo) UpsertSetting(ctx context.Context, key, value string) (s *Setting
         def.Set(s.Key, key),
         def.Set(s.Value, value),
         postgres.OnConflict(s.Key).DoUpdate(
-            def.Set(s.Value, def.Func[any]("EXCLUDED.value")),
+            def.Set(s.Value, postgres.Excluded(s.Value)),
         ),
         postgres.Returning(),
     )

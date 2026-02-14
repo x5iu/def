@@ -20,3 +20,9 @@ func TestOnConflictPlaceholder(t *testing.T) {
 		t.Fatalf("DoUpdate() should return nil placeholder")
 	}
 }
+
+func TestExcludedPlaceholder(t *testing.T) {
+	if Excluded("x") != nil {
+		t.Fatalf("Excluded() should return nil placeholder")
+	}
+}

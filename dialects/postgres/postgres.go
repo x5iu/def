@@ -49,7 +49,7 @@ type ConflictTarget struct{}
 //	        def.Set(role.Name, name),
 //	        def.Set(role.CreatedAt, def.Func[any]("now")),
 //	        postgres.OnConflict(role.Name).DoUpdate(
-//	            def.Set(role.Name, def.Func[any]("EXCLUDED.name")),
+//	            def.Set(role.Name, postgres.Excluded(role.Name)),
 //	        ),
 //	        postgres.Returning(),
 //	    )
@@ -62,6 +62,17 @@ func (ConflictTarget) DoNothing() any { return nil }
 
 // DoUpdate generates ON CONFLICT (...) DO UPDATE SET ...
 // Arguments should be def.Set() expressions specifying columns to update when a
-// conflict occurs. Use def.Func[any]("EXCLUDED.column_name") to reference the
-// would-be inserted value.
+// conflict occurs. Use [Excluded] to reference the would-be inserted value.
 func (ConflictTarget) DoUpdate(sets ...any) any { return nil }
+
+// Excluded references a column from PostgreSQL's EXCLUDED pseudo-table in an
+// ON CONFLICT DO UPDATE SET clause. The argument should be a struct field
+// expression identifying the column. Preview breaking change:
+// def.Func("EXCLUDED.column") is no longer supported.
+//
+// Example:
+//
+//	postgres.OnConflict(role.Name).DoUpdate(
+//	    def.Set(role.Name, postgres.Excluded(role.Name)),
+//	)
+func Excluded(column any) any { return nil }
