@@ -36,6 +36,11 @@ type GenerateOptions struct {
 	// TxIsolation sets the isolation level for the generated WithTx method comment.
 	// Expected format: "sql.LevelSerializable".
 	TxIsolation string
+	// WithTx forces generation of WithTx method even if source interface does not declare it.
+	WithTx bool
+	// WithTxFnType overrides the fn argument type in generated WithTx signature:
+	// WithTx(ctx context.Context, fn func(<WithTxFnType>) error) error.
+	WithTxFnType string
 }
 
 // Generate generates code for packages matching the given pattern.
@@ -208,14 +213,27 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 	// Generate interface
 	buf.WriteString(fmt.Sprintf("type %s interface {\n", interfaceInfo.Name))
 	withTxMethod, hasWithTx := findInterfaceMethod(interfaceInfo, "WithTx")
-	if opts != nil && opts.TxIsolation != "" && !hasWithTx {
+	forceWithTx := opts != nil && opts.WithTx
+	hasWithTxFnType := opts != nil && strings.TrimSpace(opts.WithTxFnType) != ""
+	emitWithTx := hasWithTx || forceWithTx
+	if hasWithTxFnType && !emitWithTx {
+		return nil, fmt.Errorf("--tx-type requires WithTx method or --tx")
+	}
+	if opts != nil && opts.TxIsolation != "" && !emitWithTx {
 		return nil, fmt.Errorf("--tx-isolation requires WithTx method in interface %s", interfaceInfo.Name)
 	}
-	if hasWithTx {
+	if emitWithTx {
 		if opts != nil && opts.TxIsolation != "" {
 			buf.WriteString(fmt.Sprintf("\t// WithTx ISOLATION=%s\n", opts.TxIsolation))
 		}
-		buf.WriteString(fmt.Sprintf("\tWithTx%s\n\n", withTxMethod.Signature))
+		switch {
+		case hasWithTxFnType:
+			buf.WriteString(fmt.Sprintf("\tWithTx%s\n\n", generateWithTxSignature(strings.TrimSpace(opts.WithTxFnType))))
+		case hasWithTx:
+			buf.WriteString(fmt.Sprintf("\tWithTx%s\n\n", withTxMethod.Signature))
+		default:
+			buf.WriteString(fmt.Sprintf("\tWithTx%s\n\n", generateWithTxSignature(interfaceInfo.Name)))
+		}
 	}
 
 	// Generate public query methods with SQL comments
@@ -491,6 +509,10 @@ func findInterfaceMethod(iface *InterfaceInfo, name string) (*InterfaceMethod, b
 		}
 	}
 	return nil, false
+}
+
+func generateWithTxSignature(fnType string) string {
+	return fmt.Sprintf("(ctx context.Context, fn func(%s) error) error", fnType)
 }
 
 // generateMethodSignature generates a method signature string.

@@ -43,6 +43,8 @@ If `-o/--output` is provided, it is treated as a file name relative to each pack
 | `--defc-features` | | Additional defc features to include (e.g., `sqlx/rebind,sqlx/in`). Merged with auto-detected features like `sqlx/callback`. |
 | `--defc-generate` | | Directly invoke defc to generate the implementation file, instead of emitting a `//go:generate` directive. When set, `--defc` is ignored. |
 | `--tx-isolation` | | Transaction isolation level enum for generated `WithTx` comment. Allowed values: `default`, `read-uncommitted`, `read-committed`, `write-committed`, `repeatable-read`, `snapshot`, `serializable`, `linearizable`. |
+| `--tx` | | Always generate `WithTx` method if source interface does not declare it. |
+| `--tx-type` | | Override `WithTx` signature to use `fn func(<type>) error` (requires source `WithTx` or `--tx`). |
 
 **Examples:**
 
@@ -68,12 +70,19 @@ def generate --defc-features "sqlx/rebind,sqlx/in" .
 # Add transaction isolation metadata to WithTx (requires source interface to declare WithTx)
 def generate --tx-isolation serializable .
 
+# Always generate WithTx
+def generate --tx .
+
+# Customize fn argument type in generated WithTx
+def generate --tx --tx-type TxStore .
+
 # Generate intermediate + implementation in one step (no //go:generate directive)
 def generate --tags def --defc-generate --defc-features "sqlx/rebind,sqlx/in" -o store.go .
 ```
 
-`WithTx` is only emitted when the source interface already declares a `WithTx` method.
-If `--tx-isolation` is provided but no `WithTx` method exists on the selected interface, generation fails fast with an error.
+By default, `WithTx` is emitted only when the source interface already declares a `WithTx` method.
+Use `--tx` to force generation when source interface does not declare `WithTx`.
+If `--tx-isolation` is provided but no `WithTx` method exists and `--tx` is not set, generation fails fast with an error.
 
 ## Input Format Specification
 

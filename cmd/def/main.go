@@ -43,6 +43,8 @@ expressions to generate SQL statements (SELECT, INSERT, UPDATE, DELETE).`,
 	var defcFeatures string
 	var defcGenerate bool
 	var txIsolation string
+	var withTx bool
+	var withTxFnType string
 
 	generateCmd := &cobra.Command{
 		Use:   "generate [patterns...]",
@@ -58,6 +60,8 @@ Examples:
   def generate --tags def .       Include files with //go:build def
   def generate --defc "go tool defc" .  Customize defc command
   def generate --tx-isolation serializable .  Add WithTx isolation metadata
+  def generate --tx .  Always generate WithTx method
+  def generate --tx --tx-type TxStore .  Customize WithTx fn argument type
   def generate --tags def --defc-generate --defc-features "sqlx/rebind,sqlx/in" -o store.go .
                                         Generate intermediate + implementation in one step
 
@@ -111,6 +115,8 @@ Supported expressions:
 				DefcFeatures:  defcFeatures,
 				DefcGenerate:  defcGenerate,
 				TxIsolation:   mappedIsolation,
+				WithTx:        withTx,
+				WithTxFnType:  withTxFnType,
 			}
 
 			for _, pattern := range patterns {
@@ -129,6 +135,8 @@ Supported expressions:
 	generateCmd.Flags().StringVar(&defcFeatures, "defc-features", "", "additional defc features to include in //go:generate directive (e.g., \"sqlx/rebind,sqlx/in\")")
 	generateCmd.Flags().BoolVar(&defcGenerate, "defc-generate", false, "directly invoke defc to generate the implementation file, instead of emitting a //go:generate directive")
 	generateCmd.Flags().StringVar(&txIsolation, "tx-isolation", "", "transaction isolation level for WithTx comment ("+strings.Join(defgen.SupportedTxIsolationValues(), ", ")+")")
+	generateCmd.Flags().BoolVar(&withTx, "tx", false, "always generate WithTx method when source interface doesn't declare it")
+	generateCmd.Flags().StringVar(&withTxFnType, "tx-type", "", "override fn argument type in generated WithTx signature (requires source WithTx or --tx)")
 	if err := generateCmd.MarkFlagFilename("output", "go"); err != nil {
 		log.Fatalf("failed to mark flag filename: %v", err)
 	}

@@ -37,6 +37,12 @@ func TestGenerateCommandHelpIncludesTxIsolation(t *testing.T) {
 	if !strings.Contains(output.String(), "tx-isolation") {
 		t.Fatalf("generate help output should mention tx-isolation flag")
 	}
+	if !strings.Contains(output.String(), "tx") {
+		t.Fatalf("generate help output should mention tx flag")
+	}
+	if !strings.Contains(output.String(), "tx-type") {
+		t.Fatalf("generate help output should mention tx-type flag")
+	}
 }
 
 func TestBadFlagPrintsError(t *testing.T) {
