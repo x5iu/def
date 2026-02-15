@@ -33,6 +33,9 @@ type GenerateOptions struct {
 	// DefcGenerate, when true, directly invokes defc code generation after writing
 	// the intermediate file, instead of emitting a //go:generate directive.
 	DefcGenerate bool
+	// TxIsolation sets the isolation level for the generated WithTx method comment.
+	// Expected format: "sql.LevelSerializable".
+	TxIsolation string
 }
 
 // Generate generates code for packages matching the given pattern.
@@ -162,9 +165,11 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 	// Determine interface name
 	var interfaceInfo *InterfaceInfo
 	if opts != nil && opts.InterfaceName != "" {
-		// Use user-specified interface name
-		interfaceInfo = &InterfaceInfo{
-			Name: opts.InterfaceName,
+		// Use user-specified interface name; preserve parsed methods when available.
+		if iface, ok := pkg.Interfaces[opts.InterfaceName]; ok {
+			interfaceInfo = iface
+		} else {
+			interfaceInfo = &InterfaceInfo{Name: opts.InterfaceName}
 		}
 	} else {
 		// Find the interface that matches our methods
@@ -202,6 +207,16 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 
 	// Generate interface
 	buf.WriteString(fmt.Sprintf("type %s interface {\n", interfaceInfo.Name))
+	withTxMethod, hasWithTx := findInterfaceMethod(interfaceInfo, "WithTx")
+	if opts != nil && opts.TxIsolation != "" && !hasWithTx {
+		return nil, fmt.Errorf("--tx-isolation requires WithTx method in interface %s", interfaceInfo.Name)
+	}
+	if hasWithTx {
+		if opts != nil && opts.TxIsolation != "" {
+			buf.WriteString(fmt.Sprintf("\t// WithTx ISOLATION=%s\n", opts.TxIsolation))
+		}
+		buf.WriteString(fmt.Sprintf("\tWithTx%s\n\n", withTxMethod.Signature))
+	}
 
 	// Generate public query methods with SQL comments
 	for _, method := range pkg.Methods {
@@ -464,6 +479,18 @@ func joinInterfaceNames(ifaces []*InterfaceInfo) string {
 	}
 	sort.Strings(names)
 	return strings.Join(names, ", ")
+}
+
+func findInterfaceMethod(iface *InterfaceInfo, name string) (*InterfaceMethod, bool) {
+	if iface == nil {
+		return nil, false
+	}
+	for i := range iface.Methods {
+		if iface.Methods[i].Name == name {
+			return &iface.Methods[i], true
+		}
+	}
+	return nil, false
 }
 
 // generateMethodSignature generates a method signature string.

@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/x5iu/def/internal/defgen"
@@ -41,6 +42,7 @@ expressions to generate SQL statements (SELECT, INSERT, UPDATE, DELETE).`,
 	var defcCmd string
 	var defcFeatures string
 	var defcGenerate bool
+	var txIsolation string
 
 	generateCmd := &cobra.Command{
 		Use:   "generate [patterns...]",
@@ -55,6 +57,7 @@ Examples:
   def generate -o query_gen.go .  Generate to custom output file
   def generate --tags def .       Include files with //go:build def
   def generate --defc "go tool defc" .  Customize defc command
+  def generate --tx-isolation serializable .  Add WithTx isolation metadata
   def generate --tags def --defc-generate --defc-features "sqlx/rebind,sqlx/in" -o store.go .
                                         Generate intermediate + implementation in one step
 
@@ -95,6 +98,11 @@ Supported expressions:
 				log.Fatalf("failed to get working directory: %v", err)
 			}
 
+			mappedIsolation, err := defgen.ParseTxIsolationFlag(txIsolation)
+			if err != nil {
+				log.Fatalf("generate failed: %v", err)
+			}
+
 			opts := &defgen.GenerateOptions{
 				Output:        outputPath,
 				Tags:          buildTags,
@@ -102,6 +110,7 @@ Supported expressions:
 				DefcCmd:       defcCmd,
 				DefcFeatures:  defcFeatures,
 				DefcGenerate:  defcGenerate,
+				TxIsolation:   mappedIsolation,
 			}
 
 			for _, pattern := range patterns {
@@ -119,6 +128,7 @@ Supported expressions:
 	generateCmd.Flags().StringVar(&defcCmd, "defc", "", "defc command for //go:generate directive (e.g., \"go tool defc\", \"defc\", default: \"go run -mod=mod github.com/x5iu/defc@latest\")")
 	generateCmd.Flags().StringVar(&defcFeatures, "defc-features", "", "additional defc features to include in //go:generate directive (e.g., \"sqlx/rebind,sqlx/in\")")
 	generateCmd.Flags().BoolVar(&defcGenerate, "defc-generate", false, "directly invoke defc to generate the implementation file, instead of emitting a //go:generate directive")
+	generateCmd.Flags().StringVar(&txIsolation, "tx-isolation", "", "transaction isolation level for WithTx comment ("+strings.Join(defgen.SupportedTxIsolationValues(), ", ")+")")
 	if err := generateCmd.MarkFlagFilename("output", "go"); err != nil {
 		log.Fatalf("failed to mark flag filename: %v", err)
 	}
