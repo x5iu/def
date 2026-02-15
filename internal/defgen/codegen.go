@@ -199,7 +199,7 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 		if opts != nil {
 			extraFeatures = opts.DefcFeatures
 		}
-		defcOutput := strings.ToLower(interfaceInfo.Name) + "_impl.go"
+		defcOutput := implOutputPathFromIntermediate(intermediateOutputName(opts))
 		features := buildDefcFeatures(len(pkg.CallbackMethods) > 0, extraFeatures)
 		if features != "" {
 			buf.WriteString(fmt.Sprintf("//go:generate %s generate --features %s -T %s -o %s\n\n",
@@ -825,7 +825,7 @@ func invokeDefc(intermediateFile string, intermediateCode []byte, pkg *Package, 
 	}
 
 	// Write output file
-	outputPath := filepath.Join(filepath.Dir(intermediateFile), strings.ToLower(interfaceName)+"_impl.go")
+	outputPath := implOutputPathFromIntermediate(intermediateFile)
 	result, err := imports.Process(outputPath, buf.Bytes(), &imports.Options{
 		Comments:  true,
 		TabIndent: true,
@@ -860,6 +860,21 @@ func containsFeature(features []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func intermediateOutputName(opts *GenerateOptions) string {
+	if opts == nil || strings.TrimSpace(opts.Output) == "" {
+		return "def_gen.go"
+	}
+	return opts.Output
+}
+
+func implOutputPathFromIntermediate(intermediate string) string {
+	ext := filepath.Ext(intermediate)
+	if ext == "" {
+		return intermediate + "_impl.go"
+	}
+	return strings.TrimSuffix(intermediate, ext) + "_impl" + ext
 }
 
 // generateBuildConstraint generates a negated build constraint from tags.
