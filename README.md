@@ -475,6 +475,55 @@ func (q *querier) BumpUserVersion(ctx context.Context, id int64) (sql.Result, er
 // Generates: UPDATE users SET version = version + 1, updated_at = now() WHERE id = ${id}
 ```
 
+WITH CTE + UPDATE FROM (batch claim / retry queue):
+
+```go
+func (q *querier) ClaimDueSettlementRetries(ctx context.Context, limit int) ([]*SettlementRetry, error) {
+    var sr SettlementRetry
+    var due SettlementRetry
+    return def.Update(
+        def.With(
+            "due",
+            def.From(sr),
+            def.Column(sr.ID),
+            def.Filter(sr.DoneAt == nil),
+            def.Filter(sr.DeadAt == nil),
+            def.Filter(sr.NextRetryAt <= postgres.Now()),
+            def.OrderBy(
+                def.Asc(sr.NextRetryAt),
+                def.Asc(sr.ID),
+            ),
+            def.Limit(limit),
+            postgres.ForUpdateSkipLocked(),
+        ),
+        def.Set(sr.Attempts, sr.Attempts+1),
+        def.Set(sr.NextRetryAt, postgres.Now()+postgres.Interval("10 minutes")),
+        def.Set(sr.UpdatedAt, postgres.Now()),
+        def.From("due"),
+        def.Filter(sr.ID == due.ID),
+        postgres.Returning(sr.ID, sr.RequestID, sr.Payload, sr.Attempts),
+    )
+}
+// Generates:
+// WITH due AS (
+//     SELECT id
+//     FROM settlement_retries
+//     WHERE done_at IS NULL
+//       AND dead_at IS NULL
+//       AND next_retry_at <= NOW()
+//     ORDER BY next_retry_at ASC, id ASC
+//     LIMIT ${limit}
+//     FOR UPDATE SKIP LOCKED
+// )
+// UPDATE settlement_retries
+// SET attempts = attempts + 1,
+//     next_retry_at = NOW() + INTERVAL '10 minutes',
+//     updated_at = NOW()
+// FROM due
+// WHERE settlement_retries.id = due.id
+// RETURNING id, request_id, payload, attempts
+```
+
 #### Delete
 
 Use `def.Delete` with optional `def.Filter`:

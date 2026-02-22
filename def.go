@@ -87,6 +87,17 @@ func Create(...any) any { return nil }
 //	generates "UPDATE users SET name = ${name} WHERE id = ${id}"
 func Update(any, ...any) any { return nil }
 
+// With defines a named CTE (common table expression) for mutation statements.
+// It takes a CTE name and query-like clauses such as Column, Filter, From, OrderBy,
+// Limit, Offset, and dialect-specific lock clauses.
+func With(string, ...any) any { return nil }
+
+// From specifies a source.
+//
+// In def.With(...), use a table variable (e.g., def.From(user)).
+// In def.Update(...), use a source name string (e.g., def.From("due")) for UPDATE ... FROM ...
+func From(any) any { return nil }
+
 // Delete defines a DELETE operation.
 // It requires at least one Filter expression to prevent accidental full table deletion.
 // Example: def.Delete(def.Filter(user.ID == id)) generates "DELETE FROM users WHERE id = ${id}"
@@ -103,6 +114,16 @@ func Set(any, any) any { return nil }
 // Example: def.Limit(10) generates "LIMIT 10"
 // Example: def.Limit(pageSize) generates "LIMIT ${pageSize}"
 func Limit(int) any { return nil }
+
+// OrderBy specifies ORDER BY expressions.
+// Use Asc/Desc to set sort direction explicitly.
+func OrderBy(...any) any { return nil }
+
+// Asc specifies ascending order for an ORDER BY item.
+func Asc(any) any { return nil }
+
+// Desc specifies descending order for an ORDER BY item.
+func Desc(any) any { return nil }
 
 // Offset specifies the number of rows to skip before returning results.
 // Example: def.Offset(20) generates "OFFSET 20"

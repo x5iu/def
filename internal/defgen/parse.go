@@ -839,6 +839,12 @@ func parseFilterOperand(pkg *Package, expr ast.Expr, structs map[string]*structI
 		return operand, nil
 
 	case *ast.CallExpr:
+		if isPostgresNowCall(pkg, e) {
+			operand.IsFunc = true
+			operand.FuncName = "NOW"
+			return operand, nil
+		}
+
 		// Check for generic function call: def.Count[int64](x), def.Func[T](name, args...)
 		if funcName, ok := isGenericDefCall(pkg, e); ok {
 			operand.IsFunc = true
@@ -1109,15 +1115,17 @@ func parseMutationMethod(pkg *Package, fn *ast.FuncDecl, kind MethodKind, mutati
 		method.ConflictSets = createResult.ConflictSets
 
 	case MethodKindUpdate:
-		targetType, sets, filters, entityParam, returningCols, err := parseUpdateArgs(pkg, mutationCall, structs, method.Params)
+		updateResult, err := parseUpdateArgs(pkg, mutationCall, structs, method.Params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Update args: %w", err)
 		}
-		method.TargetType = targetType
-		method.Sets = sets
-		method.Filters = filters
-		method.EntityParam = entityParam
-		method.ReturningCols = returningCols
+		method.TargetType = updateResult.TargetType
+		method.Sets = updateResult.Sets
+		method.Filters = updateResult.Filters
+		method.EntityParam = updateResult.EntityParam
+		method.ReturningCols = updateResult.ReturningCols
+		method.WithClauses = updateResult.WithClauses
+		method.FromSources = updateResult.FromSources
 
 	case MethodKindDelete:
 		targetType, filters, returningCols, err := parseDeleteArgs(pkg, mutationCall, structs, method.Params)
@@ -1141,6 +1149,17 @@ type createArgsResult struct {
 	ConflictColumns []ColumnExpr
 	ConflictAction  string
 	ConflictSets    []SetExpr
+}
+
+// updateArgsResult holds the parsed results of def.Update() arguments.
+type updateArgsResult struct {
+	TargetType    string
+	Sets          []SetExpr
+	Filters       []*FilterExpr
+	EntityParam   *ParamInfo
+	ReturningCols []ColumnExpr
+	WithClauses   []WithClause
+	FromSources   []string
 }
 
 // parseCreateArgs parses arguments for def.Create().
@@ -1247,13 +1266,12 @@ func parseCreateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 }
 
 // parseUpdateArgs parses arguments for def.Update().
-// Returns (targetType, sets, filters, entityParam, returningCols, error).
-func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (string, []SetExpr, []*FilterExpr, *ParamInfo, []ColumnExpr, error) {
+func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (*updateArgsResult, error) {
 	if len(call.Args) == 0 {
-		return "", nil, nil, nil, nil, fmt.Errorf("def.Update requires at least 1 argument")
+		return nil, fmt.Errorf("def.Update requires at least 1 argument")
 	}
 
-	var returningCols []ColumnExpr
+	result := &updateArgsResult{}
 
 	// Check if first argument is an identifier (entity mode) or a def.Set call (field mode)
 	firstArg := call.Args[0]
@@ -1261,50 +1279,31 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 		// Check if this identifier is a method parameter (entity mode)
 		for i := range params {
 			if params[i].Name == ident.Name {
-				targetType := getTypeKey(params[i].Type)
+				result.TargetType = getTypeKey(params[i].Type)
+				result.EntityParam = &params[i]
 
-				// Parse remaining arguments for Filter and Returning expressions
-				var filters []*FilterExpr
+				// Parse remaining arguments.
 				for _, arg := range call.Args[1:] {
 					argCall, ok := arg.(*ast.CallExpr)
 					if !ok {
 						continue
 					}
 
-					// Check for postgres.Returning()
-					if isPostgresReturningCall(pkg, argCall) {
-						cols, err := parseReturningColumns(pkg, argCall, structs, params)
-						if err != nil {
-							return "", nil, nil, nil, nil, err
-						}
-						returningCols = cols
-						continue
-					}
-
-					if isDefCall(pkg, argCall, "Filter") {
-						if len(argCall.Args) != 1 {
-							return "", nil, nil, nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
-						}
-						filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
-						if err != nil {
-							return "", nil, nil, nil, nil, err
-						}
-						filters = append(filters, filter)
+					if err := parseUpdateExtraArg(pkg, argCall, structs, params, result); err != nil {
+						return nil, err
 					}
 				}
 
-				if len(filters) == 0 {
-					return "", nil, nil, nil, nil, fmt.Errorf("def.Update requires at least one Filter expression")
+				if len(result.Filters) == 0 {
+					return nil, fmt.Errorf("def.Update requires at least one Filter expression")
 				}
 
-				return targetType, nil, filters, &params[i], returningCols, nil
+				return result, nil
 			}
 		}
 	}
 
-	// Field mode: def.Update(def.Set(...), def.Set(...), def.Filter(...), postgres.Returning(...))
-	var sets []SetExpr
-	var filters []*FilterExpr
+	// Field mode: def.Update(def.Set(...), def.Set(...), def.Filter(...), postgres.Returning(...), def.With(...), def.From("cte"))
 	var targetType string
 
 	for _, arg := range call.Args {
@@ -1313,20 +1312,10 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 			continue
 		}
 
-		// Check for postgres.Returning()
-		if isPostgresReturningCall(pkg, argCall) {
-			cols, err := parseReturningColumns(pkg, argCall, structs, params)
-			if err != nil {
-				return "", nil, nil, nil, nil, err
-			}
-			returningCols = cols
-			continue
-		}
-
 		if isDefCall(pkg, argCall, "Set") {
 			setExpr, err := parseSetExpr(pkg, argCall, structs, params)
 			if err != nil {
-				return "", nil, nil, nil, nil, err
+				return nil, err
 			}
 
 			// Determine target type from the first Set's field path
@@ -1334,30 +1323,234 @@ func parseUpdateArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 				targetType = getTypeKey(setExpr.FieldPath[0].Type)
 			}
 
-			sets = append(sets, setExpr)
+			result.Sets = append(result.Sets, setExpr)
 			continue
 		}
 
-		if isDefCall(pkg, argCall, "Filter") {
-			if len(argCall.Args) != 1 {
-				return "", nil, nil, nil, nil, fmt.Errorf("def.Filter requires exactly 1 argument")
-			}
-			filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
-			if err != nil {
-				return "", nil, nil, nil, nil, err
-			}
-			filters = append(filters, filter)
+		if err := parseUpdateExtraArg(pkg, argCall, structs, params, result); err != nil {
+			return nil, err
 		}
 	}
 
-	if len(sets) == 0 {
-		return "", nil, nil, nil, nil, fmt.Errorf("def.Update requires at least one Set expression")
+	if len(result.Sets) == 0 {
+		return nil, fmt.Errorf("def.Update requires at least one Set expression")
 	}
-	if len(filters) == 0 {
-		return "", nil, nil, nil, nil, fmt.Errorf("def.Update requires at least one Filter expression")
+	if len(result.Filters) == 0 {
+		return nil, fmt.Errorf("def.Update requires at least one Filter expression")
 	}
 
-	return targetType, sets, filters, nil, returningCols, nil
+	result.TargetType = targetType
+	return result, nil
+}
+
+func parseUpdateExtraArg(pkg *Package, argCall *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo, result *updateArgsResult) error {
+	// postgres.Returning(...)
+	if isPostgresReturningCall(pkg, argCall) {
+		cols, err := parseReturningColumns(pkg, argCall, structs, params)
+		if err != nil {
+			return err
+		}
+		result.ReturningCols = cols
+		return nil
+	}
+
+	// def.Filter(...)
+	if isDefCall(pkg, argCall, "Filter") {
+		if len(argCall.Args) != 1 {
+			return fmt.Errorf("def.Filter requires exactly 1 argument")
+		}
+		filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
+		if err != nil {
+			return err
+		}
+		result.Filters = append(result.Filters, filter)
+		return nil
+	}
+
+	// def.With(...)
+	if isDefCall(pkg, argCall, "With") {
+		withClause, err := parseWithClause(pkg, argCall, structs, params)
+		if err != nil {
+			return err
+		}
+		result.WithClauses = append(result.WithClauses, withClause)
+		return nil
+	}
+
+	// def.From("source")
+	if isDefCall(pkg, argCall, "From") {
+		source, err := parseUpdateFromSource(argCall)
+		if err != nil {
+			return err
+		}
+		result.FromSources = append(result.FromSources, source)
+		return nil
+	}
+
+	return nil
+}
+
+func parseWithClause(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) (WithClause, error) {
+	var clause WithClause
+	if len(call.Args) < 2 {
+		return clause, fmt.Errorf("def.With requires a name and at least one clause")
+	}
+
+	nameLit, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || nameLit.Kind != token.STRING {
+		return clause, fmt.Errorf("def.With first argument must be a string literal name")
+	}
+	name, err := strconv.Unquote(nameLit.Value)
+	if err != nil || strings.TrimSpace(name) == "" {
+		return clause, fmt.Errorf("invalid def.With name %q", nameLit.Value)
+	}
+	clause.Name = name
+
+	for _, arg := range call.Args[1:] {
+		argCall, ok := arg.(*ast.CallExpr)
+		if !ok {
+			return clause, fmt.Errorf("unsupported argument in def.With: %T", arg)
+		}
+
+		switch {
+		case isDefCall(pkg, argCall, "Column"):
+			if len(argCall.Args) != 1 {
+				return clause, fmt.Errorf("def.Column requires exactly 1 argument")
+			}
+			col, err := parseColumnExpr(pkg, argCall.Args[0], structs, params)
+			if err != nil {
+				return clause, fmt.Errorf("failed to parse def.With column: %w", err)
+			}
+			clause.Columns = append(clause.Columns, col)
+
+		case isDefCall(pkg, argCall, "Filter"):
+			if len(argCall.Args) != 1 {
+				return clause, fmt.Errorf("def.Filter requires exactly 1 argument")
+			}
+			filter, err := parseFilterExprRecursive(pkg, argCall.Args[0], structs, params)
+			if err != nil {
+				return clause, fmt.Errorf("failed to parse def.With filter: %w", err)
+			}
+			clause.Filters = append(clause.Filters, filter)
+
+		case isDefCall(pkg, argCall, "From"):
+			targetType, err := parseWithFromSource(pkg, argCall)
+			if err != nil {
+				return clause, err
+			}
+			clause.TargetType = targetType
+
+		case isDefCall(pkg, argCall, "OrderBy"):
+			items, err := parseOrderByExprs(pkg, argCall, structs, params)
+			if err != nil {
+				return clause, err
+			}
+			clause.OrderBy = append(clause.OrderBy, items...)
+
+		case isDefCall(pkg, argCall, "Limit"):
+			expr, err := parsePaginationExpr(argCall, params)
+			if err != nil {
+				return clause, fmt.Errorf("failed to parse def.With limit: %w", err)
+			}
+			clause.Limit = expr
+
+		case isDefCall(pkg, argCall, "Offset"):
+			expr, err := parsePaginationExpr(argCall, params)
+			if err != nil {
+				return clause, fmt.Errorf("failed to parse def.With offset: %w", err)
+			}
+			clause.Offset = expr
+
+		case isPostgresForUpdateSkipLockedCall(pkg, argCall):
+			clause.ForUpdateSkipLocked = true
+
+		default:
+			return clause, fmt.Errorf("unsupported def.With argument: %T", argCall.Fun)
+		}
+	}
+
+	if clause.TargetType == "" {
+		return clause, fmt.Errorf("def.With(%q) requires def.From(tableVar) to specify source table", clause.Name)
+	}
+
+	return clause, nil
+}
+
+func parseWithFromSource(pkg *Package, call *ast.CallExpr) (string, error) {
+	if len(call.Args) != 1 {
+		return "", fmt.Errorf("def.From in def.With requires exactly 1 argument")
+	}
+	t := pkg.TypesInfo.TypeOf(call.Args[0])
+	if t == nil {
+		return "", fmt.Errorf("unable to infer source type from def.From argument")
+	}
+	targetType := getTypeKey(t)
+	if targetType == "" {
+		return "", fmt.Errorf("def.From argument is not a supported bound table type")
+	}
+	if _, ok := pkg.Tables[targetType]; !ok {
+		return "", fmt.Errorf("table binding not found for def.From type %q", typeStringForLookup(t))
+	}
+	return targetType, nil
+}
+
+func parseUpdateFromSource(call *ast.CallExpr) (string, error) {
+	if len(call.Args) != 1 {
+		return "", fmt.Errorf("def.From in def.Update requires exactly 1 argument")
+	}
+	lit, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", fmt.Errorf("def.From in def.Update requires a source name string literal")
+	}
+	name, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", fmt.Errorf("invalid def.From source: %w", err)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("def.From source name must not be empty")
+	}
+	return name, nil
+}
+
+func parseOrderByExprs(pkg *Package, call *ast.CallExpr, structs map[string]*structInfo, params []ParamInfo) ([]OrderByExpr, error) {
+	if len(call.Args) == 0 {
+		return nil, fmt.Errorf("def.OrderBy requires at least 1 argument")
+	}
+
+	var out []OrderByExpr
+	for _, arg := range call.Args {
+		item, err := parseOrderByExpr(pkg, arg, structs, params)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func parseOrderByExpr(pkg *Package, expr ast.Expr, structs map[string]*structInfo, params []ParamInfo) (OrderByExpr, error) {
+	if call, ok := expr.(*ast.CallExpr); ok {
+		if isDefCall(pkg, call, "Asc") || isDefCall(pkg, call, "Desc") {
+			if len(call.Args) != 1 {
+				return OrderByExpr{}, fmt.Errorf("def.Asc/def.Desc requires exactly 1 argument")
+			}
+			col, err := parseColumnExpr(pkg, call.Args[0], structs, params)
+			if err != nil {
+				return OrderByExpr{}, fmt.Errorf("failed to parse ORDER BY expression: %w", err)
+			}
+			return OrderByExpr{
+				Column: col,
+				Desc:   isDefCall(pkg, call, "Desc"),
+			}, nil
+		}
+	}
+
+	col, err := parseColumnExpr(pkg, expr, structs, params)
+	if err != nil {
+		return OrderByExpr{}, fmt.Errorf("failed to parse ORDER BY expression: %w", err)
+	}
+	return OrderByExpr{Column: col}, nil
 }
 
 // parseDeleteArgs parses arguments for def.Delete().
@@ -1561,6 +1754,26 @@ func buildSetValueExprSQL(pkg *Package, expr ast.Expr, structs map[string]*struc
 			return buildSetDefFuncSQL(pkg, e, structs, params)
 		}
 
+		if isPostgresNowCall(pkg, e) {
+			return "NOW()", nil
+		}
+
+		if isPostgresIntervalCall(pkg, e) {
+			if len(e.Args) != 1 {
+				return "", fmt.Errorf("postgres.Interval requires exactly 1 argument")
+			}
+			intervalLit, ok := e.Args[0].(*ast.BasicLit)
+			if !ok || intervalLit.Kind != token.STRING {
+				return "", fmt.Errorf("postgres.Interval argument must be a string literal")
+			}
+			intervalValue, err := strconv.Unquote(intervalLit.Value)
+			if err != nil {
+				return "", fmt.Errorf("invalid postgres.Interval value: %w", err)
+			}
+			intervalValue = strings.ReplaceAll(intervalValue, "'", "''")
+			return "INTERVAL '" + intervalValue + "'", nil
+		}
+
 		// postgres.Excluded(field) -> "EXCLUDED.column_name"
 		if isPostgresExcludedCall(pkg, e) {
 			if len(e.Args) != 1 {
@@ -1718,6 +1931,43 @@ func isPostgresExcludedCall(pkg *Package, call *ast.CallExpr) bool {
 		return false
 	}
 
+	return pkgName.Imported().Path() == postgresPkgPath
+}
+
+func isPostgresNowCall(pkg *Package, call *ast.CallExpr) bool {
+	return isPostgresCall(pkg, call, "Now")
+}
+
+func isPostgresIntervalCall(pkg *Package, call *ast.CallExpr) bool {
+	return isPostgresCall(pkg, call, "Interval")
+}
+
+func isPostgresForUpdateSkipLockedCall(pkg *Package, call *ast.CallExpr) bool {
+	return isPostgresCall(pkg, call, "ForUpdateSkipLocked")
+}
+
+func isPostgresCall(pkg *Package, call *ast.CallExpr, name string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if sel.Sel.Name != name {
+		return false
+	}
+
+	ident, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	obj := pkg.TypesInfo.Uses[ident]
+	if obj == nil {
+		return false
+	}
+
+	pkgName, ok := obj.(*types.PkgName)
+	if !ok {
+		return false
+	}
 	return pkgName.Imported().Path() == postgresPkgPath
 }
 

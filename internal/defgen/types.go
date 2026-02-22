@@ -147,6 +147,26 @@ type PaginationExpr struct {
 	Value     int64  // literal value if IsParam is false
 }
 
+// OrderByExpr represents one ORDER BY item.
+type OrderByExpr struct {
+	Column ColumnExpr // Column or function expression
+	Desc   bool       // true for DESC, false for ASC
+}
+
+// WithClause represents a WITH (CTE) query used by mutation statements.
+type WithClause struct {
+	Name string // CTE name, e.g., "due"
+
+	TargetType string // source table type key
+	Columns    []ColumnExpr
+	Filters    []*FilterExpr
+	OrderBy    []OrderByExpr
+	Limit      *PaginationExpr
+	Offset     *PaginationExpr
+
+	ForUpdateSkipLocked bool // PostgreSQL FOR UPDATE SKIP LOCKED
+}
+
 // SetExpr represents a SET clause assignment in INSERT/UPDATE operations.
 type SetExpr struct {
 	FieldPath []FieldPathElement // Field path (e.g., user.Name -> [user, Name])
@@ -183,6 +203,10 @@ type MutationMethod struct {
 	ConflictColumns []ColumnExpr // ON CONFLICT (col1, col2) target columns
 	ConflictAction  string       // "nothing" or "update"
 	ConflictSets    []SetExpr    // DO UPDATE SET assignments (only when ConflictAction == "update")
+
+	// UPDATE extensions
+	WithClauses []WithClause // WITH cte AS (...)
+	FromSources []string     // UPDATE ... FROM source1, source2
 }
 
 // MutationReturnType represents the return type of a mutation method.

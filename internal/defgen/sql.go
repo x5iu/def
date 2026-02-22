@@ -345,6 +345,167 @@ func generateOnConflictClause(pkg *Package, method *MutationMethod) string {
 	return ""
 }
 
+func generateWithClausesSQL(pkg *Package, withClauses []WithClause) (string, error) {
+	if len(withClauses) == 0 {
+		return "", nil
+	}
+
+	parts := make([]string, 0, len(withClauses))
+	for _, clause := range withClauses {
+		sql, err := generateWithClauseSQL(pkg, clause)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, sql)
+	}
+	return "WITH " + strings.Join(parts, ", "), nil
+}
+
+func generateWithClauseSQL(pkg *Package, clause WithClause) (string, error) {
+	binding, err := lookupTableByTargetType(pkg, clause.TargetType)
+	if err != nil {
+		return "", fmt.Errorf("could not determine source table for WITH %q: %w", clause.Name, err)
+	}
+
+	selectClause := "*"
+	if len(clause.Columns) > 0 {
+		selectClause = buildSelectClause(pkg, clause.Columns)
+	}
+
+	var sql strings.Builder
+	sql.WriteString("SELECT ")
+	sql.WriteString(selectClause)
+	sql.WriteString(" FROM ")
+	sql.WriteString(binding.TableName)
+
+	conditions, err := buildFilterConditions(pkg, clause.Filters, nil)
+	if err != nil {
+		return "", err
+	}
+	if len(conditions) > 0 {
+		sql.WriteString(" WHERE ")
+		sql.WriteString(strings.Join(conditions, " AND "))
+	}
+
+	if len(clause.OrderBy) > 0 {
+		var orderBy []string
+		for _, item := range clause.OrderBy {
+			part := formatColumnExpr(pkg, item.Column)
+			if item.Desc {
+				part += " DESC"
+			} else {
+				part += " ASC"
+			}
+			orderBy = append(orderBy, part)
+		}
+		sql.WriteString(" ORDER BY ")
+		sql.WriteString(strings.Join(orderBy, ", "))
+	}
+
+	if clause.Limit != nil {
+		if clause.Limit.IsParam {
+			sql.WriteString(fmt.Sprintf(" LIMIT ${%s}", clause.Limit.ParamName))
+		} else {
+			sql.WriteString(fmt.Sprintf(" LIMIT %d", clause.Limit.Value))
+		}
+	}
+	if clause.Offset != nil {
+		if clause.Offset.IsParam {
+			sql.WriteString(fmt.Sprintf(" OFFSET ${%s}", clause.Offset.ParamName))
+		} else {
+			sql.WriteString(fmt.Sprintf(" OFFSET %d", clause.Offset.Value))
+		}
+	}
+
+	if clause.ForUpdateSkipLocked {
+		sql.WriteString(" FOR UPDATE SKIP LOCKED")
+	}
+
+	return fmt.Sprintf("%s AS (%s)", clause.Name, sql.String()), nil
+}
+
+func buildFilterConditions(pkg *Package, filters []*FilterExpr, qualifier *filterQualifier) ([]string, error) {
+	var conditions []string
+	for _, filter := range filters {
+		analyzed, err := analyzeFilterWithQualifier(pkg, filter, qualifier)
+		if err != nil {
+			return nil, err
+		}
+		if analyzed == nil {
+			continue
+		}
+
+		cond := formatFilterTree(analyzed)
+		if cond != "" {
+			conditions = append(conditions, cond)
+		}
+	}
+	return conditions, nil
+}
+
+func buildUpdateFilterQualifier(tableName string, method *MutationMethod) *filterQualifier {
+	if len(method.WithClauses) == 0 && len(method.FromSources) == 0 {
+		return nil
+	}
+
+	qualifier := &filterQualifier{
+		Default: tableName,
+		Vars:    make(map[string]string),
+	}
+
+	for _, clause := range method.WithClauses {
+		if clause.Name == "" {
+			continue
+		}
+		qualifier.Vars[clause.Name] = clause.Name
+	}
+
+	for _, source := range method.FromSources {
+		qualifierName, varName := parseFromSourceQualifier(source)
+		if qualifierName == "" {
+			continue
+		}
+		qualifier.Vars[qualifierName] = qualifierName
+		if varName != "" {
+			qualifier.Vars[varName] = qualifierName
+		}
+	}
+
+	return qualifier
+}
+
+func parseFromSourceQualifier(source string) (qualifierName, varName string) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "", ""
+	}
+
+	parts := strings.Fields(source)
+	if len(parts) == 0 {
+		return "", ""
+	}
+
+	qualifierName = parts[0]
+	qualifierName = strings.TrimSuffix(qualifierName, ",")
+
+	if len(parts) >= 3 && strings.EqualFold(parts[len(parts)-2], "AS") {
+		varName = parts[len(parts)-1]
+	} else if len(parts) >= 2 {
+		varName = parts[len(parts)-1]
+	}
+
+	// No explicit alias: fallback to right-most segment (schema.table -> table)
+	if varName == "" {
+		varName = qualifierName
+		if dot := strings.LastIndex(varName, "."); dot != -1 && dot+1 < len(varName) {
+			varName = varName[dot+1:]
+		}
+	}
+
+	varName = strings.Trim(varName, `"`)
+	return qualifierName, varName
+}
+
 // generateUpdateSQL generates an UPDATE SQL statement.
 func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 	// Determine the table name
@@ -357,12 +518,19 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 	}
 	tableName := binding.TableName
 
-	var sql string
+	var withPrefix string
+	if len(method.WithClauses) > 0 {
+		withPrefix, err = generateWithClausesSQL(pkg, method.WithClauses)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	var setClause []string
 
 	// Entity mode: UPDATE table SET col1 = ${param.Field1}, col2 = ${param.Field2} WHERE ...
 	if method.EntityParam != nil {
 		// Build SET clause from all fields (skip primary key)
-		var setClause []string
 		for _, field := range binding.Fields {
 			if field.IsPrimaryKey {
 				continue
@@ -374,34 +542,8 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 		if len(setClause) == 0 {
 			return "", fmt.Errorf("no columns to update for method %s", method.Name)
 		}
-
-		sql = fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", "))
-
-		// Build WHERE clause
-		if len(method.Filters) > 0 {
-			var conditions []string
-			for _, filter := range method.Filters {
-				analyzed, err := AnalyzeFilter(pkg, filter)
-				if err != nil {
-					return "", err
-				}
-				if analyzed == nil {
-					continue
-				}
-
-				cond := formatFilterTree(analyzed)
-				if cond != "" {
-					conditions = append(conditions, cond)
-				}
-			}
-
-			if len(conditions) > 0 {
-				sql += " WHERE " + strings.Join(conditions, " AND ")
-			}
-		}
 	} else {
 		// Field mode: UPDATE table SET col1 = val1, col2 = val2 WHERE ...
-		var setClause []string
 		for _, set := range method.Sets {
 			colName := resolveSetColumnName(pkg, set)
 			if colName == "" {
@@ -413,37 +555,34 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 		if len(setClause) == 0 {
 			return "", fmt.Errorf("no columns specified for UPDATE in method %s", method.Name)
 		}
+	}
 
-		sql = fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", "))
+	var sql strings.Builder
+	if withPrefix != "" {
+		sql.WriteString(withPrefix)
+		sql.WriteString(" ")
+	}
+	sql.WriteString(fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", ")))
 
-		// Build WHERE clause
-		if len(method.Filters) > 0 {
-			var conditions []string
-			for _, filter := range method.Filters {
-				analyzed, err := AnalyzeFilter(pkg, filter)
-				if err != nil {
-					return "", err
-				}
-				if analyzed == nil {
-					continue
-				}
+	if len(method.FromSources) > 0 {
+		sql.WriteString(" FROM ")
+		sql.WriteString(strings.Join(method.FromSources, ", "))
+	}
 
-				cond := formatFilterTree(analyzed)
-				if cond != "" {
-					conditions = append(conditions, cond)
-				}
-			}
-
-			if len(conditions) > 0 {
-				sql += " WHERE " + strings.Join(conditions, " AND ")
-			}
-		}
+	qualifier := buildUpdateFilterQualifier(tableName, method)
+	conditions, err := buildFilterConditions(pkg, method.Filters, qualifier)
+	if err != nil {
+		return "", err
+	}
+	if len(conditions) > 0 {
+		sql.WriteString(" WHERE ")
+		sql.WriteString(strings.Join(conditions, " AND "))
 	}
 
 	// Append RETURNING clause if needed
-	sql += generateReturningClause(pkg, method)
+	sql.WriteString(generateReturningClause(pkg, method))
 
-	return sql, nil
+	return sql.String(), nil
 }
 
 // generateDeleteSQL generates a DELETE SQL statement.
@@ -556,6 +695,8 @@ func FormatSQL(sql string) string {
 	var result strings.Builder
 
 	switch {
+	case strings.HasPrefix(sql, "WITH "):
+		result.WriteString(formatWithSQL(sql))
 	case strings.HasPrefix(sql, "SELECT "):
 		result.WriteString(formatSelectSQL(sql))
 	case strings.HasPrefix(sql, "INSERT INTO "):
@@ -568,6 +709,101 @@ func FormatSQL(sql string) string {
 		result.WriteString(sql)
 	}
 
+	return result.String()
+}
+
+// formatWithSQL formats a WITH statement and delegates formatting of inner SELECT
+// and the trailing main statement.
+func formatWithSQL(sql string) string {
+	var result strings.Builder
+
+	// Find main statement after WITH clauses.
+	mainPos := -1
+	inSingleQuote := false
+	depth := 0
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+		if inSingleQuote {
+			if c == '\'' {
+				if i+1 < len(sql) && sql[i+1] == '\'' {
+					i++
+					continue
+				}
+				inSingleQuote = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inSingleQuote = true
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		default:
+			if depth == 0 && strings.HasPrefix(sql[i:], " UPDATE ") {
+				mainPos = i + 1 // skip the leading space before UPDATE
+			}
+			if depth == 0 && strings.HasPrefix(sql[i:], " SELECT ") {
+				mainPos = i + 1
+			}
+			if depth == 0 && strings.HasPrefix(sql[i:], " DELETE ") {
+				mainPos = i + 1
+			}
+			if depth == 0 && strings.HasPrefix(sql[i:], " INSERT ") {
+				mainPos = i + 1
+			}
+		}
+		if mainPos != -1 {
+			break
+		}
+	}
+	if mainPos == -1 {
+		return sql
+	}
+
+	withBody := strings.TrimSpace(sql[len("WITH "):mainPos])
+	mainSQL := strings.TrimSpace(sql[mainPos:])
+	cteClauses := splitTopLevelCSV(withBody)
+	if len(cteClauses) == 0 {
+		return sql
+	}
+
+	result.WriteString("WITH ")
+	for i, clause := range cteClauses {
+		clause = strings.TrimSpace(clause)
+		asPos := findKeywordOutsideSubquery(clause, " AS ")
+		if asPos == -1 {
+			// Fallback for unexpected shapes.
+			result.WriteString(clause)
+		} else {
+			name := strings.TrimSpace(clause[:asPos])
+			queryPart := strings.TrimSpace(clause[asPos+4:])
+			if !strings.HasPrefix(queryPart, "(") || !strings.HasSuffix(queryPart, ")") {
+				result.WriteString(clause)
+			} else {
+				inner := strings.TrimSpace(queryPart[1 : len(queryPart)-1])
+				result.WriteString(name)
+				result.WriteString(" AS (\n")
+				innerFormatted := FormatSQL(inner)
+				for _, line := range strings.Split(innerFormatted, "\n") {
+					result.WriteString("    ")
+					result.WriteString(line)
+					result.WriteString("\n")
+				}
+				result.WriteString(")")
+			}
+		}
+
+		if i < len(cteClauses)-1 {
+			result.WriteString(",\n")
+		}
+	}
+
+	result.WriteString("\n")
+	result.WriteString(FormatSQL(mainSQL))
 	return result.String()
 }
 
@@ -588,41 +824,47 @@ func formatSelectSQL(sql string) string {
 	// FROM clause
 	remaining := sql[fromPos+1:] // skip the leading space
 	wherePos := findKeywordOutsideSubquery(remaining, " WHERE ")
+	orderPos := findKeywordOutsideSubquery(remaining, " ORDER BY ")
+	limitPos := findKeywordOutsideSubquery(remaining, " LIMIT ")
 
-	if wherePos == -1 {
-		// No WHERE clause, check for LIMIT/OFFSET
-		limitPos := findKeywordOutsideSubquery(remaining, " LIMIT ")
-		if limitPos == -1 {
-			result.WriteString(strings.TrimSpace(remaining))
-			return result.String()
+	fromEnd := len(remaining)
+	for _, pos := range []int{wherePos, orderPos, limitPos} {
+		if pos != -1 && pos < fromEnd {
+			fromEnd = pos
 		}
-		// FROM ... part
-		result.WriteString(strings.TrimSpace(remaining[:limitPos]))
-		result.WriteString("\n")
-		// LIMIT/OFFSET clause
-		result.WriteString(strings.TrimSpace(remaining[limitPos+1:]))
-		return result.String()
 	}
 
 	// FROM ... part
-	result.WriteString(strings.TrimSpace(remaining[:wherePos]))
-	result.WriteString("\n")
+	result.WriteString(strings.TrimSpace(remaining[:fromEnd]))
 
-	// WHERE clause (may include LIMIT/OFFSET)
-	whereClause := strings.TrimSpace(remaining[wherePos+1:]) // skip the leading space
-
-	// Check for LIMIT in where clause
-	limitPos := findKeywordOutsideSubquery(whereClause, " LIMIT ")
-	if limitPos == -1 {
+	// WHERE clause
+	if wherePos != -1 {
+		whereEnd := len(remaining)
+		for _, pos := range []int{orderPos, limitPos} {
+			if pos != -1 && pos > wherePos && pos < whereEnd {
+				whereEnd = pos
+			}
+		}
+		result.WriteString("\n")
+		whereClause := strings.TrimSpace(remaining[wherePos+1 : whereEnd]) // skip the leading space
 		result.WriteString(formatWhereClause(whereClause))
-		return result.String()
 	}
 
-	// WHERE ... part
-	result.WriteString(formatWhereClause(strings.TrimSpace(whereClause[:limitPos])))
-	result.WriteString("\n")
-	// LIMIT/OFFSET clause
-	result.WriteString(strings.TrimSpace(whereClause[limitPos+1:]))
+	// ORDER BY clause
+	if orderPos != -1 {
+		orderEnd := len(remaining)
+		if limitPos != -1 && limitPos > orderPos {
+			orderEnd = limitPos
+		}
+		result.WriteString("\n")
+		result.WriteString(strings.TrimSpace(remaining[orderPos+1 : orderEnd])) // skip the leading space
+	}
+
+	// LIMIT/OFFSET and trailing lock clauses
+	if limitPos != -1 {
+		result.WriteString("\n")
+		result.WriteString(strings.TrimSpace(remaining[limitPos+1:])) // skip the leading space
+	}
 
 	return result.String()
 }
@@ -715,6 +957,90 @@ func formatInsertSQL(sql string) string {
 	}
 
 	return result.String()
+}
+
+// splitTopLevelCSV splits a comma-separated list at top level, keeping commas
+// inside parentheses and quoted strings intact.
+func splitTopLevelCSV(s string) []string {
+	var parts []string
+	var current strings.Builder
+	depth := 0
+	braceDepth := 0
+	inSingleQuote := false
+	inDoubleQuote := false
+
+	flush := func() {
+		part := strings.TrimSpace(current.String())
+		if part != "" {
+			parts = append(parts, part)
+		}
+		current.Reset()
+	}
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+
+		if inSingleQuote {
+			current.WriteByte(c)
+			if c == '\'' {
+				if i+1 < len(s) && s[i+1] == '\'' {
+					current.WriteByte(s[i+1])
+					i++
+					continue
+				}
+				inSingleQuote = false
+			}
+			continue
+		}
+		if inDoubleQuote {
+			current.WriteByte(c)
+			if c == '"' {
+				if i+1 < len(s) && s[i+1] == '"' {
+					current.WriteByte(s[i+1])
+					i++
+					continue
+				}
+				inDoubleQuote = false
+			}
+			continue
+		}
+
+		switch c {
+		case '\'':
+			inSingleQuote = true
+			current.WriteByte(c)
+		case '"':
+			inDoubleQuote = true
+			current.WriteByte(c)
+		case '(':
+			depth++
+			current.WriteByte(c)
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			current.WriteByte(c)
+		case '{':
+			braceDepth++
+			current.WriteByte(c)
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+			current.WriteByte(c)
+		case ',':
+			if depth == 0 && braceDepth == 0 {
+				flush()
+			} else {
+				current.WriteByte(c)
+			}
+		default:
+			current.WriteByte(c)
+		}
+	}
+
+	flush()
+	return parts
 }
 
 // splitValues splits VALUES content, handling nested ${...} expressions.
@@ -885,16 +1211,31 @@ func formatUpdateSQL(sql string) string {
 
 	// Find WHERE position
 	wherePos := findKeywordOutsideSubquery(remaining, " WHERE ")
-	if wherePos == -1 {
-		// No WHERE clause
-		result.WriteString(formatSetClause(remaining))
-	} else {
-		// SET ... part
-		result.WriteString(formatSetClause(remaining[:wherePos]))
-		result.WriteString("\n")
+	setAndFromPart := remaining
+	var whereClause string
+	if wherePos != -1 {
+		setAndFromPart = strings.TrimSpace(remaining[:wherePos])
+		whereClause = strings.TrimSpace(remaining[wherePos+1:])
+	}
 
-		// WHERE clause
-		whereClause := strings.TrimSpace(remaining[wherePos+1:])
+	// Find FROM position after SET
+	fromPos := findKeywordOutsideSubquery(setAndFromPart, " FROM ")
+	setPart := setAndFromPart
+	var fromClause string
+	if fromPos != -1 {
+		setPart = strings.TrimSpace(setAndFromPart[:fromPos])
+		fromClause = strings.TrimSpace(setAndFromPart[fromPos+1:]) // "FROM ..."
+	}
+
+	result.WriteString(formatSetClause(setPart))
+
+	if fromClause != "" {
+		result.WriteString("\n")
+		result.WriteString(fromClause)
+	}
+
+	if whereClause != "" {
+		result.WriteString("\n")
 		result.WriteString(formatWhereClause(whereClause))
 	}
 

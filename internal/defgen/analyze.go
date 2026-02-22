@@ -23,14 +23,14 @@ type AnalyzedFilter struct {
 	// For comparison/IN nodes
 	ColumnName string
 	Operator   string
-	Value      string // Either ${param} or 'literal' or number
+	Value      string // Either ${param} or 'literal' or number or column reference
 
 	// For foreign key subqueries
 	IsSubquery      bool
 	ForeignKeyCol   string // e.g., "user_id"
 	SubqueryTable   string // e.g., "users"
 	SubqueryColumn  string // e.g., "name"
-	SubqueryValue   string // e.g., "${username}"
+	SubqueryValue   string // e.g., "${username}" or column reference
 	SubqueryIDField string // e.g., "id" (the primary key of referenced table)
 
 	// For IS NULL / IS NOT NULL checks
@@ -47,8 +47,17 @@ type AnalyzedFilter struct {
 	Children []*AnalyzedFilter
 }
 
+type filterQualifier struct {
+	Default string            // default qualifier for unresolved vars
+	Vars    map[string]string // explicit var -> qualifier mapping
+}
+
 // AnalyzeFilter analyzes a filter expression tree and produces an AnalyzedFilter tree.
 func AnalyzeFilter(pkg *Package, filter *FilterExpr) (*AnalyzedFilter, error) {
+	return analyzeFilterWithQualifier(pkg, filter, nil)
+}
+
+func analyzeFilterWithQualifier(pkg *Package, filter *FilterExpr, qualifier *filterQualifier) (*AnalyzedFilter, error) {
 	if filter == nil {
 		return nil, nil
 	}
@@ -57,7 +66,7 @@ func AnalyzeFilter(pkg *Package, filter *FilterExpr) (*AnalyzedFilter, error) {
 	case FilterAnd:
 		children := make([]*AnalyzedFilter, 0, len(filter.Children))
 		for _, child := range filter.Children {
-			analyzed, err := AnalyzeFilter(pkg, child)
+			analyzed, err := analyzeFilterWithQualifier(pkg, child, qualifier)
 			if err != nil {
 				return nil, err
 			}
@@ -73,7 +82,7 @@ func AnalyzeFilter(pkg *Package, filter *FilterExpr) (*AnalyzedFilter, error) {
 	case FilterOr:
 		children := make([]*AnalyzedFilter, 0, len(filter.Children))
 		for _, child := range filter.Children {
-			analyzed, err := AnalyzeFilter(pkg, child)
+			analyzed, err := analyzeFilterWithQualifier(pkg, child, qualifier)
 			if err != nil {
 				return nil, err
 			}
@@ -87,10 +96,10 @@ func AnalyzeFilter(pkg *Package, filter *FilterExpr) (*AnalyzedFilter, error) {
 		}, nil
 
 	case FilterIn:
-		return analyzeLeafFilter(pkg, filter, true)
+		return analyzeLeafFilter(pkg, filter, true, qualifier)
 
 	case FilterComparison:
-		return analyzeLeafFilter(pkg, filter, false)
+		return analyzeLeafFilter(pkg, filter, false, qualifier)
 
 	default:
 		return nil, fmt.Errorf("unsupported filter kind: %v", filter.Kind)
@@ -98,7 +107,7 @@ func AnalyzeFilter(pkg *Package, filter *FilterExpr) (*AnalyzedFilter, error) {
 }
 
 // analyzeLeafFilter analyzes a comparison or IN filter expression.
-func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFilter, error) {
+func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool, qualifier *filterQualifier) (*AnalyzedFilter, error) {
 	kind := AnalyzedFilterComparison
 	if isIn {
 		kind = AnalyzedFilterIn
@@ -113,7 +122,7 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 	if filter.Left.IsFunc {
 		// Left side is a function call
 		analyzed.LeftIsFunc = true
-		analyzed.LeftFuncExpr = formatFuncOperand(pkg, filter.Left)
+		analyzed.LeftFuncExpr = formatFuncOperandWithQualifier(pkg, filter.Left, qualifier)
 	} else if filter.Left.IsField {
 		path := filter.Left.FieldPath
 		if len(path) < 2 {
@@ -144,7 +153,11 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 			for _, fk := range binding.ForeignKeys {
 				if fk.FieldName == path[fkIndex].FieldName {
 					fkMatched = true
-					analyzed.ForeignKeyCol = fk.KeyColumn
+					fkCol := fk.KeyColumn
+					if q := qualifierForVar(qualifier, path[0].VarName); q != "" {
+						fkCol = q + "." + fkCol
+					}
+					analyzed.ForeignKeyCol = fkCol
 
 					// Get the referenced type's table
 					refBinding, err := lookupTableByType(pkg, fk.RefType)
@@ -177,23 +190,9 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 			}
 		} else {
 			// Simple field access (e.g., user.ID)
-			// The last element is the field
-			lastField := path[len(path)-1]
-
-			// Find the column name
-			binding, err := lookupTableByType(pkg, path[0].Type)
-			if err != nil {
-				return nil, err
-			}
-
-			for _, f := range binding.Fields {
-				if f.GoName == lastField.FieldName {
-					analyzed.ColumnName = f.DBName
-					break
-				}
-			}
+			analyzed.ColumnName = resolveColumnNameFromPathWithQualifier(pkg, path, qualifier)
 			if analyzed.ColumnName == "" {
-				return nil, fmt.Errorf("field %s not found in table %s", lastField.FieldName, binding.TableName)
+				return nil, fmt.Errorf("failed to resolve field path in filter")
 			}
 		}
 	}
@@ -202,7 +201,17 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 	if filter.Right.IsFunc {
 		// Right side is a function call
 		analyzed.RightIsFunc = true
-		analyzed.RightFuncExpr = formatFuncOperand(pkg, filter.Right)
+		analyzed.RightFuncExpr = formatFuncOperandWithQualifier(pkg, filter.Right, qualifier)
+	} else if filter.Right.IsField {
+		value := resolveColumnNameFromPathWithQualifier(pkg, filter.Right.FieldPath, qualifier)
+		if value == "" {
+			return nil, fmt.Errorf("failed to resolve right-hand field in filter")
+		}
+		if analyzed.IsSubquery {
+			analyzed.SubqueryValue = value
+		} else {
+			analyzed.Value = value
+		}
 	} else if filter.Right.IsParam {
 		value := "${" + filter.Right.ParamName + "}"
 		if analyzed.IsSubquery {
@@ -250,18 +259,26 @@ func analyzeLeafFilter(pkg *Package, filter *FilterExpr, isIn bool) (*AnalyzedFi
 
 // formatFuncOperand formats a function operand for SQL.
 func formatFuncOperand(pkg *Package, op FilterOperand) string {
+	return formatFuncOperandWithQualifier(pkg, op, nil)
+}
+
+func formatFuncOperandWithQualifier(pkg *Package, op FilterOperand, qualifier *filterQualifier) string {
 	var args []string
 	for _, arg := range op.FuncArgs {
-		args = append(args, formatFilterFuncArg(pkg, arg))
+		args = append(args, formatFilterFuncArgWithQualifier(pkg, arg, qualifier))
 	}
 	return fmt.Sprintf("%s(%s)", op.FuncName, strings.Join(args, ", "))
 }
 
 // formatFilterFuncArg formats a single function argument for SQL in filter context.
 func formatFilterFuncArg(pkg *Package, arg FuncArg) string {
+	return formatFilterFuncArgWithQualifier(pkg, arg, nil)
+}
+
+func formatFilterFuncArgWithQualifier(pkg *Package, arg FuncArg, qualifier *filterQualifier) string {
 	switch {
 	case arg.IsField:
-		return resolveColumnNameFromPath(pkg, arg.FieldPath)
+		return resolveColumnNameFromPathWithQualifier(pkg, arg.FieldPath, qualifier)
 	case arg.IsParam:
 		return fmt.Sprintf("${%s}", arg.Value)
 	case arg.IsLiteral:
@@ -277,6 +294,10 @@ func formatFilterFuncArg(pkg *Package, arg FuncArg) string {
 
 // resolveColumnNameFromPath resolves a field path to a column name.
 func resolveColumnNameFromPath(pkg *Package, fieldPath []FieldPathElement) string {
+	return resolveColumnNameFromPathWithQualifier(pkg, fieldPath, nil)
+}
+
+func resolveColumnNameFromPathWithQualifier(pkg *Package, fieldPath []FieldPathElement, qualifier *filterQualifier) string {
 	if len(fieldPath) < 2 {
 		return ""
 	}
@@ -290,11 +311,27 @@ func resolveColumnNameFromPath(pkg *Package, fieldPath []FieldPathElement) strin
 	lastElem := fieldPath[len(fieldPath)-1]
 	for _, field := range binding.Fields {
 		if field.GoName == lastElem.FieldName {
-			return field.DBName
+			col := field.DBName
+			if q := qualifierForVar(qualifier, fieldPath[0].VarName); q != "" {
+				return q + "." + col
+			}
+			return col
 		}
 	}
 
 	return ""
+}
+
+func qualifierForVar(qualifier *filterQualifier, varName string) string {
+	if qualifier == nil {
+		return ""
+	}
+	if qualifier.Vars != nil {
+		if q, ok := qualifier.Vars[varName]; ok {
+			return q
+		}
+	}
+	return qualifier.Default
 }
 
 // tokenToSQLOp converts a Go token to SQL operator.

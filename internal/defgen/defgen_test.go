@@ -600,6 +600,71 @@ func TestParseSetValueExpressions(t *testing.T) {
 		}
 	})
 
+	t.Run("postgres.Interval generates INTERVAL literal", func(t *testing.T) {
+		pgIdent := ast.NewIdent("postgres")
+		expr := &ast.CallExpr{
+			Fun: &ast.SelectorExpr{
+				X:   pgIdent,
+				Sel: ast.NewIdent("Interval"),
+			},
+			Args: []ast.Expr{
+				&ast.BasicLit{Kind: token.STRING, Value: `"10 minutes"`},
+			},
+		}
+		pkg := &Package{
+			TypesInfo: &types.Info{
+				Uses: map[*ast.Ident]types.Object{
+					pgIdent: types.NewPkgName(token.NoPos, nil, "postgres", types.NewPackage(postgresPkgPath, "postgres")),
+				},
+			},
+		}
+
+		value, err := parseSetValue(pkg, expr, map[string]*structInfo{}, nil)
+		if err != nil {
+			t.Fatalf("parseSetValue() error = %v", err)
+		}
+		if value.ExprSQL != "INTERVAL '10 minutes'" {
+			t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, "INTERVAL '10 minutes'")
+		}
+	})
+
+	t.Run("postgres.Now plus postgres.Interval", func(t *testing.T) {
+		pgIdent := ast.NewIdent("postgres")
+		expr := &ast.BinaryExpr{
+			X: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X:   pgIdent,
+					Sel: ast.NewIdent("Now"),
+				},
+			},
+			Op: token.ADD,
+			Y: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X:   pgIdent,
+					Sel: ast.NewIdent("Interval"),
+				},
+				Args: []ast.Expr{
+					&ast.BasicLit{Kind: token.STRING, Value: `"10 minutes"`},
+				},
+			},
+		}
+		pkg := &Package{
+			TypesInfo: &types.Info{
+				Uses: map[*ast.Ident]types.Object{
+					pgIdent: types.NewPkgName(token.NoPos, nil, "postgres", types.NewPackage(postgresPkgPath, "postgres")),
+				},
+			},
+		}
+
+		value, err := parseSetValue(pkg, expr, map[string]*structInfo{}, nil)
+		if err != nil {
+			t.Fatalf("parseSetValue() error = %v", err)
+		}
+		if value.ExprSQL != "NOW() + INTERVAL '10 minutes'" {
+			t.Fatalf("parseSetValue().ExprSQL = %q, want %q", value.ExprSQL, "NOW() + INTERVAL '10 minutes'")
+		}
+	})
+
 	t.Run("preserve right-branch binary semantics", func(t *testing.T) {
 		tests := []struct {
 			name string
@@ -665,6 +730,120 @@ func TestParseSetValueExpressions(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestParseWithClause(t *testing.T) {
+	retryType := stubType("SettlementRetry")
+	tableKey := getTypeKey(retryType)
+
+	defIdent := ast.NewIdent("def")
+	postgresIdent := ast.NewIdent("postgres")
+	retryIdent := ast.NewIdent("retry")
+	limitIdent := ast.NewIdent("limit")
+
+	defCall := func(name string, args ...ast.Expr) *ast.CallExpr {
+		return &ast.CallExpr{
+			Fun: &ast.SelectorExpr{
+				X:   defIdent,
+				Sel: ast.NewIdent(name),
+			},
+			Args: args,
+		}
+	}
+	postgresCall := func(name string, args ...ast.Expr) *ast.CallExpr {
+		return &ast.CallExpr{
+			Fun: &ast.SelectorExpr{
+				X:   postgresIdent,
+				Sel: ast.NewIdent(name),
+			},
+			Args: args,
+		}
+	}
+	field := func(name string) *ast.SelectorExpr {
+		return &ast.SelectorExpr{
+			X:   retryIdent,
+			Sel: ast.NewIdent(name),
+		}
+	}
+
+	withCall := defCall("With",
+		&ast.BasicLit{Kind: token.STRING, Value: `"due"`},
+		defCall("From", retryIdent),
+		defCall("Column", field("ID")),
+		defCall("Filter", &ast.BinaryExpr{
+			X:  field("DoneAt"),
+			Op: token.EQL,
+			Y:  ast.NewIdent("nil"),
+		}),
+		defCall("Filter", &ast.BinaryExpr{
+			X:  field("DeadAt"),
+			Op: token.EQL,
+			Y:  ast.NewIdent("nil"),
+		}),
+		defCall("Filter", &ast.BinaryExpr{
+			X:  field("NextRetryAt"),
+			Op: token.LEQ,
+			Y:  postgresCall("Now"),
+		}),
+		defCall("OrderBy",
+			defCall("Asc", field("NextRetryAt")),
+			defCall("Asc", field("ID")),
+		),
+		defCall("Limit", limitIdent),
+		postgresCall("ForUpdateSkipLocked"),
+	)
+
+	pkg := &Package{
+		TypesInfo: &types.Info{
+			Uses: map[*ast.Ident]types.Object{
+				defIdent:      types.NewPkgName(token.NoPos, nil, "def", types.NewPackage(defPkgPath, "def")),
+				postgresIdent: types.NewPkgName(token.NoPos, nil, "postgres", types.NewPackage(postgresPkgPath, "postgres")),
+				retryIdent:    types.NewVar(token.NoPos, nil, "retry", retryType),
+				limitIdent:    types.NewVar(token.NoPos, nil, "limit", types.Typ[types.Int]),
+			},
+		},
+		Tables: map[string]*TableBinding{
+			tableKey: {
+				Type:      retryType,
+				TypeName:  "SettlementRetry",
+				TableName: "settlement_retries",
+				Fields: []FieldInfo{
+					{GoName: "ID", DBName: "id"},
+					{GoName: "DoneAt", DBName: "done_at"},
+					{GoName: "DeadAt", DBName: "dead_at"},
+					{GoName: "NextRetryAt", DBName: "next_retry_at"},
+				},
+			},
+		},
+	}
+
+	got, err := parseWithClause(pkg, withCall, map[string]*structInfo{}, []ParamInfo{
+		{Name: "limit", Type: types.Typ[types.Int]},
+	})
+	if err != nil {
+		t.Fatalf("parseWithClause() error = %v", err)
+	}
+	if got.Name != "due" {
+		t.Fatalf("parseWithClause().Name = %q, want %q", got.Name, "due")
+	}
+	if got.TargetType != tableKey {
+		t.Fatalf("parseWithClause().TargetType = %q, want %q", got.TargetType, tableKey)
+	}
+	if len(got.Columns) != 1 {
+		t.Fatalf("parseWithClause().Columns = %d, want %d", len(got.Columns), 1)
+	}
+	if len(got.Filters) != 3 {
+		t.Fatalf("parseWithClause().Filters = %d, want %d", len(got.Filters), 3)
+	}
+	if len(got.OrderBy) != 2 {
+		t.Fatalf("parseWithClause().OrderBy = %d, want %d", len(got.OrderBy), 2)
+	}
+	if got.Limit == nil || !got.Limit.IsParam || got.Limit.ParamName != "limit" {
+		t.Fatalf("parseWithClause().Limit = %+v, want parameter limit", got.Limit)
+	}
+	if !got.ForUpdateSkipLocked {
+		t.Fatalf("parseWithClause().ForUpdateSkipLocked = false, want true")
+	}
 }
 
 func TestGenerateMutationSQL_UpdateFieldModeExpressions(t *testing.T) {
@@ -746,6 +925,203 @@ func TestGenerateMutationSQL_UpdateFieldModeExpressions(t *testing.T) {
 	}
 	if !strings.Contains(got, "WHERE id = ${id}") {
 		t.Fatalf("GenerateMutationSQL() = %q, want WHERE clause", got)
+	}
+}
+
+func TestGenerateMutationSQL_UpdateWithCTEFrom(t *testing.T) {
+	retryType := stubType("SettlementRetry")
+	tableKey := getTypeKey(retryType)
+
+	pkg := &Package{
+		Tables: map[string]*TableBinding{
+			tableKey: {
+				Type:      retryType,
+				TypeName:  "SettlementRetry",
+				TableName: "settlement_retries",
+				Fields: []FieldInfo{
+					{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+					{GoName: "RequestID", DBName: "request_id"},
+					{GoName: "Payload", DBName: "payload"},
+					{GoName: "Attempts", DBName: "attempts"},
+					{GoName: "NextRetryAt", DBName: "next_retry_at"},
+					{GoName: "UpdatedAt", DBName: "updated_at"},
+					{GoName: "DoneAt", DBName: "done_at"},
+					{GoName: "DeadAt", DBName: "dead_at"},
+				},
+			},
+		},
+	}
+
+	fieldPath := func(varName, field string) []FieldPathElement {
+		return []FieldPathElement{
+			{VarName: varName, Type: retryType},
+			{FieldName: field},
+		}
+	}
+
+	method := &MutationMethod{
+		Kind:       MethodKindUpdate,
+		Name:       "ClaimDue",
+		TargetType: tableKey,
+		Sets: []SetExpr{
+			{
+				FieldPath: fieldPath("retry", "Attempts"),
+				Value:     SetValue{ExprSQL: "attempts + 1"},
+			},
+			{
+				FieldPath: fieldPath("retry", "NextRetryAt"),
+				Value:     SetValue{ExprSQL: "NOW() + INTERVAL '10 minutes'"},
+			},
+			{
+				FieldPath: fieldPath("retry", "UpdatedAt"),
+				Value:     SetValue{ExprSQL: "NOW()"},
+			},
+		},
+		WithClauses: []WithClause{
+			{
+				Name:       "due",
+				TargetType: tableKey,
+				Columns: []ColumnExpr{
+					{FieldPath: fieldPath("retry", "ID")},
+				},
+				Filters: []*FilterExpr{
+					{
+						Kind:  FilterComparison,
+						Op:    token.EQL,
+						Left:  FilterOperand{IsField: true, FieldPath: fieldPath("retry", "DoneAt")},
+						Right: FilterOperand{IsNil: true},
+					},
+					{
+						Kind:  FilterComparison,
+						Op:    token.EQL,
+						Left:  FilterOperand{IsField: true, FieldPath: fieldPath("retry", "DeadAt")},
+						Right: FilterOperand{IsNil: true},
+					},
+					{
+						Kind: FilterComparison,
+						Op:   token.LEQ,
+						Left: FilterOperand{IsField: true, FieldPath: fieldPath("retry", "NextRetryAt")},
+						Right: FilterOperand{
+							IsFunc:   true,
+							FuncName: "NOW",
+						},
+					},
+				},
+				OrderBy: []OrderByExpr{
+					{Column: ColumnExpr{FieldPath: fieldPath("retry", "NextRetryAt")}},
+					{Column: ColumnExpr{FieldPath: fieldPath("retry", "ID")}},
+				},
+				Limit:               &PaginationExpr{IsParam: true, ParamName: "limit"},
+				ForUpdateSkipLocked: true,
+			},
+		},
+		FromSources: []string{"due"},
+		Filters: []*FilterExpr{
+			{
+				Kind: FilterComparison,
+				Op:   token.EQL,
+				Left: FilterOperand{IsField: true, FieldPath: fieldPath("retry", "ID")},
+				Right: FilterOperand{
+					IsField:   true,
+					FieldPath: fieldPath("due", "ID"),
+				},
+			},
+		},
+		ReturnType: &MutationReturnType{
+			StructName: "SettlementRetry",
+		},
+		ReturningCols: []ColumnExpr{
+			{FieldPath: fieldPath("retry", "ID")},
+			{FieldPath: fieldPath("retry", "RequestID")},
+			{FieldPath: fieldPath("retry", "Payload")},
+			{FieldPath: fieldPath("retry", "Attempts")},
+		},
+	}
+
+	got, err := GenerateMutationSQL(pkg, method)
+	if err != nil {
+		t.Fatalf("GenerateMutationSQL() error = %v", err)
+	}
+
+	wants := []string{
+		"WITH due AS (SELECT id FROM settlement_retries",
+		"done_at IS NULL",
+		"dead_at IS NULL",
+		"next_retry_at <= NOW()",
+		"ORDER BY next_retry_at ASC, id ASC",
+		"LIMIT ${limit}",
+		"FOR UPDATE SKIP LOCKED",
+		"UPDATE settlement_retries SET",
+		"FROM due",
+		"WHERE settlement_retries.id = due.id",
+		"RETURNING id, request_id, payload, attempts",
+	}
+	for _, want := range wants {
+		if !strings.Contains(got, want) {
+			t.Fatalf("GenerateMutationSQL() = %q, want to contain %q", got, want)
+		}
+	}
+}
+
+func TestGenerateMutationSQL_UpdateWithFromSourceQualifier(t *testing.T) {
+	retryType := stubType("SettlementRetry")
+	tableKey := getTypeKey(retryType)
+
+	pkg := &Package{
+		Tables: map[string]*TableBinding{
+			tableKey: {
+				Type:      retryType,
+				TypeName:  "SettlementRetry",
+				TableName: "settlement_retries",
+				Fields: []FieldInfo{
+					{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+					{GoName: "Attempts", DBName: "attempts"},
+				},
+			},
+		},
+	}
+
+	fieldPath := func(varName, field string) []FieldPathElement {
+		return []FieldPathElement{
+			{VarName: varName, Type: retryType},
+			{FieldName: field},
+		}
+	}
+
+	method := &MutationMethod{
+		Kind:       MethodKindUpdate,
+		Name:       "ClaimDue",
+		TargetType: tableKey,
+		Sets: []SetExpr{
+			{
+				FieldPath: fieldPath("retry", "Attempts"),
+				Value:     SetValue{ExprSQL: "attempts + 1"},
+			},
+		},
+		FromSources: []string{"due"},
+		Filters: []*FilterExpr{
+			{
+				Kind: FilterComparison,
+				Op:   token.EQL,
+				Left: FilterOperand{IsField: true, FieldPath: fieldPath("retry", "ID")},
+				Right: FilterOperand{
+					IsField:   true,
+					FieldPath: fieldPath("due", "ID"),
+				},
+			},
+		},
+	}
+
+	got, err := GenerateMutationSQL(pkg, method)
+	if err != nil {
+		t.Fatalf("GenerateMutationSQL() error = %v", err)
+	}
+
+	if !strings.Contains(got, "FROM due") {
+		t.Fatalf("GenerateMutationSQL() = %q, want FROM due", got)
+	}
+	if !strings.Contains(got, "WHERE settlement_retries.id = due.id") {
+		t.Fatalf("GenerateMutationSQL() = %q, want qualified FROM-source column", got)
 	}
 }
 
@@ -2100,6 +2476,11 @@ func TestFormatSQL_Update(t *testing.T) {
 			name: "UPDATE with single SET assignment",
 			sql:  "UPDATE users SET updated_at = now() WHERE id = ${id}",
 			want: "UPDATE users\nSET updated_at = now()\nWHERE id = ${id}",
+		},
+		{
+			name: "WITH + UPDATE FROM",
+			sql:  "WITH due AS (SELECT id FROM settlement_retries WHERE done_at IS NULL AND dead_at IS NULL ORDER BY next_retry_at, id LIMIT ${limit} FOR UPDATE SKIP LOCKED) UPDATE settlement_retries SET attempts = attempts + 1, updated_at = NOW() FROM due WHERE settlement_retries.id = due.id RETURNING id",
+			want: "WITH due AS (\n    SELECT id\n    FROM settlement_retries\n    WHERE done_at IS NULL\n      AND dead_at IS NULL\n    ORDER BY next_retry_at, id\n    LIMIT ${limit} FOR UPDATE SKIP LOCKED\n)\nUPDATE settlement_retries\nSET\n    attempts = attempts + 1,\n    updated_at = NOW()\nFROM due\nWHERE settlement_retries.id = due.id\nRETURNING id",
 		},
 	}
 

@@ -75,3 +75,14 @@ func (ConflictTarget) DoUpdate(sets ...any) any { return nil }
 //	    def.Set(role.Name, postgres.Excluded(role.Name)),
 //	)
 func Excluded(column any) any { return nil }
+
+// ForUpdateSkipLocked specifies FOR UPDATE SKIP LOCKED for a query-like clause
+// inside def.With(...).
+func ForUpdateSkipLocked() any { return nil }
+
+// Now represents PostgreSQL NOW().
+func Now() string { return "" }
+
+// Interval represents a PostgreSQL INTERVAL literal.
+// Example: postgres.Interval("10 minutes") => INTERVAL '10 minutes'
+func Interval(string) string { return "" }
