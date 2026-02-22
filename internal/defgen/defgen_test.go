@@ -2074,3 +2074,41 @@ func TestFormatSQL_OnConflict(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatSQL_Update(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "UPDATE with multiple SET assignments",
+			sql:  "UPDATE users SET name = ${name}, age = ${age}, updated_at = now() WHERE id = ${id}",
+			want: "UPDATE users\nSET\n    name = ${name},\n    age = ${age},\n    updated_at = now()\nWHERE id = ${id}",
+		},
+		{
+			name: "UPDATE with function args containing commas",
+			sql:  "UPDATE users SET profile = jsonb_build_object('full_name', ${name}, 'note', 'a, b'), updated_at = now() WHERE id = ${id}",
+			want: "UPDATE users\nSET\n    profile = jsonb_build_object('full_name', ${name}, 'note', 'a, b'),\n    updated_at = now()\nWHERE id = ${id}",
+		},
+		{
+			name: "UPDATE with RETURNING and multiple WHERE conditions",
+			sql:  "UPDATE users SET name = ${name}, age = ${age} WHERE id = ${id} AND tenant_id = ${tenantID} RETURNING *",
+			want: "UPDATE users\nSET\n    name = ${name},\n    age = ${age}\nWHERE id = ${id}\n  AND tenant_id = ${tenantID}\nRETURNING *",
+		},
+		{
+			name: "UPDATE with single SET assignment",
+			sql:  "UPDATE users SET updated_at = now() WHERE id = ${id}",
+			want: "UPDATE users\nSET updated_at = now()\nWHERE id = ${id}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatSQL(tt.sql)
+			if got != tt.want {
+				t.Errorf("FormatSQL():\n  got:  %q\n  want: %q", got, tt.want)
+			}
+		})
+	}
+}

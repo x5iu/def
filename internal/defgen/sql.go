@@ -743,20 +743,136 @@ func splitValues(s string) []string {
 	return values
 }
 
+// splitSetAssignments splits SET assignments by top-level commas.
+// It keeps commas inside parentheses and quoted strings intact.
+func splitSetAssignments(s string) []string {
+	var assignments []string
+	var current strings.Builder
+	depth := 0
+	braceDepth := 0
+	inSingleQuote := false
+	inDoubleQuote := false
+
+	flush := func() {
+		assignment := strings.TrimSpace(current.String())
+		if assignment != "" {
+			assignments = append(assignments, assignment)
+		}
+		current.Reset()
+	}
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+
+		if inSingleQuote {
+			current.WriteByte(c)
+			// SQL single-quote escaping: ''.
+			if c == '\'' {
+				if i+1 < len(s) && s[i+1] == '\'' {
+					current.WriteByte(s[i+1])
+					i++
+					continue
+				}
+				inSingleQuote = false
+			}
+			continue
+		}
+
+		if inDoubleQuote {
+			current.WriteByte(c)
+			// SQL double-quote escaping for identifiers: "".
+			if c == '"' {
+				if i+1 < len(s) && s[i+1] == '"' {
+					current.WriteByte(s[i+1])
+					i++
+					continue
+				}
+				inDoubleQuote = false
+			}
+			continue
+		}
+
+		switch c {
+		case '\'':
+			inSingleQuote = true
+			current.WriteByte(c)
+		case '"':
+			inDoubleQuote = true
+			current.WriteByte(c)
+		case '(':
+			depth++
+			current.WriteByte(c)
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			current.WriteByte(c)
+		case '{':
+			braceDepth++
+			current.WriteByte(c)
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+			current.WriteByte(c)
+		case ',':
+			if depth == 0 && braceDepth == 0 {
+				flush()
+			} else {
+				current.WriteByte(c)
+			}
+		default:
+			current.WriteByte(c)
+		}
+	}
+
+	flush()
+	return assignments
+}
+
+// formatSetClause formats the SET clause with one assignment per line when
+// there are multiple assignments, improving readability for wide UPDATEs.
+func formatSetClause(setClause string) string {
+	setClause = strings.TrimSpace(setClause)
+	if !strings.HasPrefix(setClause, "SET ") {
+		return setClause
+	}
+
+	assignments := splitSetAssignments(strings.TrimSpace(setClause[4:]))
+	if len(assignments) == 0 {
+		return "SET"
+	}
+	if len(assignments) == 1 {
+		return "SET " + assignments[0]
+	}
+
+	var result strings.Builder
+	result.WriteString("SET\n")
+	for i, assignment := range assignments {
+		result.WriteString("    ")
+		result.WriteString(assignment)
+		if i < len(assignments)-1 {
+			result.WriteString(",")
+			result.WriteString("\n")
+		}
+	}
+	return result.String()
+}
+
 // formatUpdateSQL formats an UPDATE SQL statement.
 func formatUpdateSQL(sql string) string {
 	var result strings.Builder
 
 	// Extract RETURNING clause if present
 	var returningClause string
-	returningPos := strings.Index(sql, " RETURNING ")
+	returningPos := findKeywordOutsideSubquery(sql, " RETURNING ")
 	if returningPos != -1 {
 		returningClause = sql[returningPos:]
 		sql = sql[:returningPos]
 	}
 
 	// Find SET position
-	setPos := strings.Index(sql, " SET ")
+	setPos := findKeywordOutsideSubquery(sql, " SET ")
 	if setPos == -1 {
 		return sql + returningClause
 	}
@@ -765,16 +881,16 @@ func formatUpdateSQL(sql string) string {
 	result.WriteString(strings.TrimSpace(sql[:setPos]))
 	result.WriteString("\n")
 
-	remaining := sql[setPos+1:] // skip the leading space
+	remaining := strings.TrimSpace(sql[setPos+1:]) // skip the leading space
 
 	// Find WHERE position
 	wherePos := findKeywordOutsideSubquery(remaining, " WHERE ")
 	if wherePos == -1 {
 		// No WHERE clause
-		result.WriteString(strings.TrimSpace(remaining))
+		result.WriteString(formatSetClause(remaining))
 	} else {
 		// SET ... part
-		result.WriteString(strings.TrimSpace(remaining[:wherePos]))
+		result.WriteString(formatSetClause(remaining[:wherePos]))
 		result.WriteString("\n")
 
 		// WHERE clause
