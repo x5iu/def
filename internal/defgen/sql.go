@@ -592,6 +592,9 @@ func generateDeleteSQL(pkg *Package, method *MutationMethod) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("could not determine table for method %s: %w", method.Name, err)
 	}
+	if len(method.Filters) == 0 {
+		return "", fmt.Errorf("def.Delete requires at least one Filter expression in method %s", method.Name)
+	}
 	tableName := binding.TableName
 
 	sql := fmt.Sprintf("DELETE FROM %s", tableName)

@@ -846,6 +846,32 @@ func TestParseWithClause(t *testing.T) {
 	}
 }
 
+func TestParseDeleteArgs_RequiresAtLeastOneFilter(t *testing.T) {
+	defIdent := ast.NewIdent("def")
+	deleteCall := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   defIdent,
+			Sel: ast.NewIdent("Delete"),
+		},
+	}
+
+	pkg := &Package{
+		TypesInfo: &types.Info{
+			Uses: map[*ast.Ident]types.Object{
+				defIdent: types.NewPkgName(token.NoPos, nil, "def", types.NewPackage(defPkgPath, "def")),
+			},
+		},
+	}
+
+	_, _, _, err := parseDeleteArgs(pkg, deleteCall, map[string]*structInfo{}, nil)
+	if err == nil {
+		t.Fatalf("parseDeleteArgs() expected error for missing delete filters")
+	}
+	if !strings.Contains(err.Error(), "def.Delete requires at least one Filter expression") {
+		t.Fatalf("parseDeleteArgs() error = %v, want missing-filter error", err)
+	}
+}
+
 func TestGenerateMutationSQL_UpdateFieldModeExpressions(t *testing.T) {
 	newNamed := func(pkgPath, pkgName, typeName string) *types.Named {
 		p := types.NewPackage(pkgPath, pkgName)
@@ -1552,6 +1578,27 @@ func testUpdateFilters() []*FilterExpr {
 	}
 }
 
+func testDeleteFilters() []*FilterExpr {
+	userType := stubType("User")
+	return []*FilterExpr{
+		{
+			Kind: FilterComparison,
+			Op:   token.EQL,
+			Left: FilterOperand{
+				IsField: true,
+				FieldPath: []FieldPathElement{
+					{VarName: "user", Type: userType},
+					{FieldName: "ID"},
+				},
+			},
+			Right: FilterOperand{
+				IsParam:   true,
+				ParamName: "id",
+			},
+		},
+	}
+}
+
 func TestGenerateCallbackMethod_BelongsToRefTypeName(t *testing.T) {
 	// Scenario: struct field name "Author" differs from type name "User"
 	// e.g., Author *User `db:"-" foreign_key:"author_id"`
@@ -1791,6 +1838,34 @@ func TestGenerateMutationSQL_UpdateWithoutFilterReturnsError(t *testing.T) {
 	_, err := GenerateMutationSQL(pkg, method)
 	if err == nil {
 		t.Fatalf("GenerateMutationSQL() expected error for missing update filters")
+	}
+	if !strings.Contains(err.Error(), "requires at least one Filter expression") {
+		t.Fatalf("GenerateMutationSQL() error = %v, want missing-filter error", err)
+	}
+}
+
+func TestGenerateMutationSQL_DeleteWithoutFilterReturnsError(t *testing.T) {
+	pkg := &Package{
+		Tables: map[string]*TableBinding{
+			"User": {
+				TypeName:  "User",
+				TableName: "users",
+				Fields: []FieldInfo{
+					{GoName: "ID", DBName: "id", IsPrimaryKey: true},
+					{GoName: "Name", DBName: "name"},
+				},
+			},
+		},
+	}
+	method := &MutationMethod{
+		Kind:       MethodKindDelete,
+		Name:       "DeleteUser",
+		TargetType: "User",
+	}
+
+	_, err := GenerateMutationSQL(pkg, method)
+	if err == nil {
+		t.Fatalf("GenerateMutationSQL() expected error for missing delete filters")
 	}
 	if !strings.Contains(err.Error(), "requires at least one Filter expression") {
 		t.Fatalf("GenerateMutationSQL() error = %v, want missing-filter error", err)
@@ -2188,6 +2263,7 @@ func TestGenerateMutationSQLWithReturning(t *testing.T) {
 				Kind:       MethodKindDelete,
 				Name:       "DeleteUser",
 				TargetType: "User",
+				Filters:    testDeleteFilters(),
 				ReturnType: &MutationReturnType{
 					StructName: "User",
 				},
@@ -2216,6 +2292,7 @@ func TestGenerateMutationSQLWithReturning(t *testing.T) {
 				Kind:       MethodKindDelete,
 				Name:       "DeleteUser",
 				TargetType: "User",
+				Filters:    testDeleteFilters(),
 				ReturnType: nil,
 			},
 			wantContains:   []string{"DELETE FROM users"},

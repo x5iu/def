@@ -1594,8 +1594,9 @@ func parseDeleteArgs(pkg *Package, call *ast.CallExpr, structs map[string]*struc
 		}
 	}
 
-	// If no filters, we need to determine target type from the method's receiver context
-	// This will be handled in SQL generation by looking at the interface or receiver type
+	if len(filters) == 0 {
+		return "", nil, nil, fmt.Errorf("def.Delete requires at least one Filter expression")
+	}
 
 	return targetType, filters, returningCols, nil
 }
