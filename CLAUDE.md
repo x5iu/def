@@ -14,6 +14,9 @@ golangci-lint run ./...
 # Run all tests
 go test ./...
 
+# Check coverage (must be >95% for every package)
+go test -cover ./...
+
 # Run tests for the core package
 go test ./internal/defgen -v
 
@@ -27,6 +30,12 @@ go test ./internal/defgen -run TestFormatFilterTree/simple_equal -v
 go run ./cmd/def generate .
 go run ./cmd/def generate ./...
 ```
+
+## Testing Requirements
+
+- Run `go test -cover ./...` when validating changes.
+- Test coverage for every package must be strictly greater than 95%.
+- Do not consider a task complete if any package coverage is at or below 95%.
 
 ## Project Overview
 

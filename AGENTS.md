@@ -27,9 +27,11 @@
 ## Testing Guidelines
 - Use Go’s standard `testing` package and table-driven tests for parser/SQL/codegen branches.
 - For generator changes, test both success and fail-fast paths (invalid filters, missing bindings, ambiguous interfaces).
+- Test coverage for every package must be strictly greater than 95% (`go test -cover ./...`). Do not consider the task complete if any package is at or below 95%.
 - Validate with at least:
   1. `go test -race ./...`
   2. `golangci-lint run ./...`
+  3. `go test -cover ./...` (each package must be `>95%`)
 
 ## Commit & Pull Request Guidelines
 - Commit style in history is concise, imperative, and English-first: `Add ...`, `Fix ...`, `Enable ...`, `Change ...`, `Enforce ...`.
