@@ -26,3 +26,15 @@ func TestExcludedPlaceholder(t *testing.T) {
 		t.Fatalf("Excluded() should return nil placeholder")
 	}
 }
+
+func TestAdditionalPlaceholders(t *testing.T) {
+	if ForUpdateSkipLocked() != nil {
+		t.Fatalf("ForUpdateSkipLocked() should return nil placeholder")
+	}
+	if Now() != "" {
+		t.Fatalf("Now() should return empty placeholder string")
+	}
+	if Interval("10 minutes") != "" {
+		t.Fatalf("Interval() should return empty placeholder string")
+	}
+}

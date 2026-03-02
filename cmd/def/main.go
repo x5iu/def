@@ -1,12 +1,21 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/x5iu/def/internal/defgen"
+)
+
+var (
+	osGetwd     = os.Getwd
+	parseTxFlag = defgen.ParseTxIsolationFlag
+	runGenerate = defgen.Generate
+	logFatalf   = log.Fatalf
+	osExit      = os.Exit
 )
 
 func main() {
@@ -17,7 +26,7 @@ func main() {
 	rootCmd := newRootCommand()
 	if err := rootCmd.Execute(); err != nil {
 		log.Printf("%v", err)
-		os.Exit(1)
+		osExit(1)
 	}
 }
 
@@ -92,21 +101,6 @@ Supported expressions:
 		Aliases: []string{"gen"},
 		Args:    cobra.ArbitraryArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			patterns := args
-			if len(patterns) == 0 {
-				patterns = []string{"."}
-			}
-
-			wd, err := os.Getwd()
-			if err != nil {
-				log.Fatalf("failed to get working directory: %v", err)
-			}
-
-			mappedIsolation, err := defgen.ParseTxIsolationFlag(txIsolation)
-			if err != nil {
-				log.Fatalf("generate failed: %v", err)
-			}
-
 			opts := &defgen.GenerateOptions{
 				Output:        outputPath,
 				Tags:          buildTags,
@@ -114,16 +108,12 @@ Supported expressions:
 				DefcCmd:       defcCmd,
 				DefcFeatures:  defcFeatures,
 				DefcGenerate:  defcGenerate,
-				TxIsolation:   mappedIsolation,
 				WithTx:        withTx,
 				WithTxFnType:  withTxFnType,
 			}
 
-			for _, pattern := range patterns {
-				if err := defgen.Generate(wd, pattern, opts); err != nil {
-					log.Fatalf("generate failed: %v", err)
-				}
-				log.Printf("generated code for %s", pattern)
+			if err := executeGenerate(args, txIsolation, opts); err != nil {
+				logFatalf("%v", err)
 			}
 		},
 	}
@@ -144,4 +134,31 @@ Supported expressions:
 	rootCmd.AddCommand(generateCmd)
 
 	return rootCmd
+}
+
+func executeGenerate(args []string, txIsolation string, opts *defgen.GenerateOptions) error {
+	patterns := args
+	if len(patterns) == 0 {
+		patterns = []string{"."}
+	}
+
+	wd, err := osGetwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	mappedIsolation, err := parseTxFlag(txIsolation)
+	if err != nil {
+		return fmt.Errorf("generate failed: %w", err)
+	}
+	opts.TxIsolation = mappedIsolation
+
+	for _, pattern := range patterns {
+		if err := runGenerate(wd, pattern, opts); err != nil {
+			return fmt.Errorf("generate failed: %w", err)
+		}
+		log.Printf("generated code for %s", pattern)
+	}
+
+	return nil
 }

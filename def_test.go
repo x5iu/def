@@ -51,6 +51,12 @@ func TestPlaceholderAPI(t *testing.T) {
 	if Update(1, 2) != nil {
 		t.Fatalf("Update() should return nil placeholder")
 	}
+	if With("due", 1) != nil {
+		t.Fatalf("With() should return nil placeholder")
+	}
+	if From("due") != nil {
+		t.Fatalf("From() should return nil placeholder")
+	}
 	if Delete(1, 2) != nil {
 		t.Fatalf("Delete() should return nil placeholder")
 	}
@@ -59,6 +65,15 @@ func TestPlaceholderAPI(t *testing.T) {
 	}
 	if Limit(1) != nil {
 		t.Fatalf("Limit() should return nil placeholder")
+	}
+	if OrderBy(1, 2) != nil {
+		t.Fatalf("OrderBy() should return nil placeholder")
+	}
+	if Asc(1) != nil {
+		t.Fatalf("Asc() should return nil placeholder")
+	}
+	if Desc(1) != nil {
+		t.Fatalf("Desc() should return nil placeholder")
 	}
 	if Offset(1) != nil {
 		t.Fatalf("Offset() should return nil placeholder")
