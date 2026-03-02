@@ -187,6 +187,8 @@ func (q *querier) DeleteUser(ctx context.Context, id int64) (sql.Result, error) 
 }
 ```
 
+`def.Delete(...)` requires at least one `def.Filter(...)`.
+
 ## PostgreSQL Patterns
 
 ### RETURNING struct rows
@@ -232,4 +234,3 @@ Use this deterministic sequence when converting hand-written SQL:
 8. Add PostgreSQL extras (`Returning`, `OnConflict`, `With`, `From`, `Now`, `Interval`) only when needed.
 9. Run `def generate` and inspect generated SQL comment.
 10. Run tests/lint and iterate until SQL shape matches intent.
-

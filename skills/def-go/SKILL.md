@@ -1,28 +1,15 @@
 ---
 name: def-go
-description: Design, convert, and troubleshoot SQL definitions built with github.com/x5iu/def in Go codebases. Use when translating SQL into def DSL (def.Query/Create/Update/Delete), adding PostgreSQL clauses (Returning, OnConflict, Excluded, Now, Interval, ForUpdateSkipLocked), implementing WITH + UPDATE ... FROM via def.With/def.From, running def generation, or fixing def parser/generator errors.
-compatibility: Requires a Go project using github.com/x5iu/def and access to go commands (go run/go test). golangci-lint is optional.
-metadata:
-  author: def-maintainers
-  version: "1.0.0"
+description: Design, convert, and troubleshoot SQL definitions written with github.com/x5iu/def in Go projects. Use when translating handwritten SQL into def.Query/Create/Update/Delete, adding PostgreSQL clauses (Returning, OnConflict, Excluded, Now, Interval, ForUpdateSkipLocked), implementing WITH plus UPDATE FROM flows with def.With/def.From, running def generation, or fixing parser and SQL-shape mismatches.
 ---
 
 # def-go Skill
 
-Use this skill to produce valid `def` DSL that `def generate` can parse and emit as correct SQL comments.
-
-## Activation Cues
-
-Activate this skill when the task includes any of these:
-- Convert handwritten SQL to `def` DSL.
-- Add or edit `def.Query`, `def.Create`, `def.Update`, or `def.Delete`.
-- Add PostgreSQL-specific clauses (`Returning`, `OnConflict`, `Excluded`, `Now`, `Interval`, `ForUpdateSkipLocked`).
-- Implement queue-claim style SQL (`WITH ... FOR UPDATE SKIP LOCKED ... UPDATE ... FROM ... RETURNING`).
-- Diagnose `def generate` parse/analysis errors.
+Produce valid `def` DSL that `def generate` can parse and emit as intended SQL comments.
 
 ## Workflow
 
-1. Inspect project wiring before editing methods.
+1. Inspect project wiring before editing method bodies.
 - Confirm `def.Init(def.BindTable[T]("table"), ...)` includes every table type you will reference.
 - Confirm struct fields used in DSL have `db:"..."` tags.
 - Confirm relation traversal fields used in filters have `foreign_key:"..."` tags.
@@ -42,7 +29,7 @@ Activate this skill when the task includes any of these:
   - Field mode: `def.Update(def.Set(...), ..., def.Filter(...))`
 - `DELETE` => `def.Delete(...)`
 
-3. Translate predicates into native Go expressions.
+3. Translate predicates and expressions into native Go syntax.
 - Prefer native operators inside `def.Filter`: `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`.
 - Use `def.In(field, values)` for SQL `IN`.
 - Use `field == nil` / `field != nil`, or `def.IsNull(field)` / `def.IsNotNull(field)` for NULL checks.
@@ -88,6 +75,11 @@ Activate this skill when the task includes any of these:
 - `def.OrderBy(...)` needs at least one item.
 - `def.Asc(...)` and `def.Desc(...)` each take exactly one expression.
 - `postgres.Interval(...)` takes exactly one string literal.
+
+## Current Behavior Notes
+
+- `def.Query(...)` parses `def.Column`, `def.Filter`, `def.Limit`, and `def.Offset`.
+- `def.OrderBy(...)` at top-level `def.Query` is not parsed and is effectively ignored.
 
 ## References
 

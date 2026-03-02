@@ -1,0 +1,4 @@
+interface:
+  display_name: "def Go DSL"
+  short_description: "Convert SQL and debug def Go DSL workflows"
+  default_prompt: "Use $def-go to convert SQL to def DSL and fix generation errors in this Go project."

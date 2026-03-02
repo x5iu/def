@@ -53,6 +53,14 @@ Cause:
 Fix:
 - Add at least one `def.Filter(...)`.
 
+### `def.Delete requires at least one Filter expression`
+
+Cause:
+- Delete has no filter guard.
+
+Fix:
+- Add at least one `def.Filter(...)`.
+
 ### `def.With("...") requires def.From(tableVar) to specify source table`
 
 Cause:
@@ -111,6 +119,10 @@ Fix:
 
 ## SQL Shape Mismatch Tips
 
+- Query result order does not change after adding `def.OrderBy(...)`:
+  - Cause: top-level `def.Query(...)` currently parses `Column/Filter/Limit/Offset` only.
+  - Fix: do not rely on `def.OrderBy(...)` in `def.Query(...)`; if ordering is required for a mutation CTE flow, place it inside `def.With(...)`.
+
 - Wrong table in SQL:
   - Confirm method return type / set field paths map to the intended bound struct type.
 - Missing column qualification in `UPDATE ... FROM` join:
@@ -119,4 +131,3 @@ Fix:
   - Add `postgres.Returning(...)` to mutation call.
 - Missing `FOR UPDATE SKIP LOCKED` in CTE:
   - Add `postgres.ForUpdateSkipLocked()` inside `def.With(...)`.
-
