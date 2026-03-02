@@ -141,14 +141,14 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 	}
 
 	// Write package declaration
-	buf.WriteString(fmt.Sprintf("package %s\n\n", pkg.PkgName))
+	fmt.Fprintf(&buf, "package %s\n\n", pkg.PkgName)
 
 	// Collect imports
 	imports := collectImports(pkg)
 	if len(imports) > 0 {
 		buf.WriteString("import (\n")
 		for _, imp := range imports {
-			buf.WriteString(fmt.Sprintf("\t%q\n", imp))
+			fmt.Fprintf(&buf, "\t%q\n", imp)
 		}
 		buf.WriteString(")\n\n")
 	}
@@ -157,7 +157,7 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 	if len(pkg.SliceTypeAliases) > 0 {
 		buf.WriteString("// Slice type aliases for Callback support\n")
 		for _, alias := range pkg.SliceTypeAliases {
-			buf.WriteString(fmt.Sprintf("type %s []%s\n", alias.AliasName, alias.ElemType))
+			fmt.Fprintf(&buf, "type %s []%s\n", alias.AliasName, alias.ElemType)
 		}
 		buf.WriteString("\n")
 	}
@@ -202,16 +202,16 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 		defcOutput := implOutputPathFromIntermediate(intermediateOutputName(opts))
 		features := buildDefcFeatures(len(pkg.CallbackMethods) > 0, extraFeatures)
 		if features != "" {
-			buf.WriteString(fmt.Sprintf("//go:generate %s generate --features %s -T %s -o %s\n\n",
-				defcCmd, features, interfaceInfo.Name, defcOutput))
+			fmt.Fprintf(&buf, "//go:generate %s generate --features %s -T %s -o %s\n\n",
+				defcCmd, features, interfaceInfo.Name, defcOutput)
 		} else {
-			buf.WriteString(fmt.Sprintf("//go:generate %s generate -T %s -o %s\n\n",
-				defcCmd, interfaceInfo.Name, defcOutput))
+			fmt.Fprintf(&buf, "//go:generate %s generate -T %s -o %s\n\n",
+				defcCmd, interfaceInfo.Name, defcOutput)
 		}
 	}
 
 	// Generate interface
-	buf.WriteString(fmt.Sprintf("type %s interface {\n", interfaceInfo.Name))
+	fmt.Fprintf(&buf, "type %s interface {\n", interfaceInfo.Name)
 	withTxMethod, hasWithTx := findInterfaceMethod(interfaceInfo, "WithTx")
 	forceWithTx := opts != nil && opts.WithTx
 	hasWithTxFnType := opts != nil && strings.TrimSpace(opts.WithTxFnType) != ""
@@ -224,15 +224,15 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 	}
 	if emitWithTx {
 		if opts != nil && opts.TxIsolation != "" {
-			buf.WriteString(fmt.Sprintf("\t// WithTx ISOLATION=%s\n", opts.TxIsolation))
+			fmt.Fprintf(&buf, "\t// WithTx ISOLATION=%s\n", opts.TxIsolation)
 		}
 		switch {
 		case hasWithTxFnType:
-			buf.WriteString(fmt.Sprintf("\tWithTx%s\n\n", generateWithTxSignature(strings.TrimSpace(opts.WithTxFnType))))
+			fmt.Fprintf(&buf, "\tWithTx%s\n\n", generateWithTxSignature(strings.TrimSpace(opts.WithTxFnType)))
 		case hasWithTx:
-			buf.WriteString(fmt.Sprintf("\tWithTx%s\n\n", withTxMethod.Signature))
+			fmt.Fprintf(&buf, "\tWithTx%s\n\n", withTxMethod.Signature)
 		default:
-			buf.WriteString(fmt.Sprintf("\tWithTx%s\n\n", generateWithTxSignature(interfaceInfo.Name)))
+			fmt.Fprintf(&buf, "\tWithTx%s\n\n", generateWithTxSignature(interfaceInfo.Name))
 		}
 	}
 
@@ -245,12 +245,12 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 
 		// Write method comment with SQL - first line uses //, SQL uses /* */
 		formattedSQL := FormatSQL(sql)
-		buf.WriteString(fmt.Sprintf("\t// %s query constbind\n", method.Name))
-		buf.WriteString(fmt.Sprintf("\t/* %s */\n", formattedSQL))
+		fmt.Fprintf(&buf, "\t// %s query constbind\n", method.Name)
+		fmt.Fprintf(&buf, "\t/* %s */\n", formattedSQL)
 
 		// Write method signature
 		sig := generateMethodSignature(pkg, method)
-		buf.WriteString(fmt.Sprintf("\t%s\n\n", sig))
+		fmt.Fprintf(&buf, "\t%s\n\n", sig)
 	}
 
 	// Generate mutation methods (Create/Update/Delete) with SQL comments
@@ -264,15 +264,15 @@ func generateCode(pkg *Package, opts *GenerateOptions) ([]byte, error) {
 		formattedSQL := FormatSQL(sql)
 		// Use "query constbind" when RETURNING is used, otherwise "exec constbind"
 		if method.ReturnType != nil {
-			buf.WriteString(fmt.Sprintf("\t// %s query constbind\n", method.Name))
+			fmt.Fprintf(&buf, "\t// %s query constbind\n", method.Name)
 		} else {
-			buf.WriteString(fmt.Sprintf("\t// %s exec constbind\n", method.Name))
+			fmt.Fprintf(&buf, "\t// %s exec constbind\n", method.Name)
 		}
-		buf.WriteString(fmt.Sprintf("\t/* %s */\n", formattedSQL))
+		fmt.Fprintf(&buf, "\t/* %s */\n", formattedSQL)
 
 		// Write method signature
 		sig := generateMutationMethodSignature(pkg, method)
-		buf.WriteString(fmt.Sprintf("\t%s\n\n", sig))
+		fmt.Fprintf(&buf, "\t%s\n\n", sig)
 	}
 
 	// Generate private relation methods
@@ -631,10 +631,10 @@ func generateRelationMethodComment(rm *RelationMethod) string {
 	var sb strings.Builder
 
 	// Build the first line with method name and options using //
-	sb.WriteString(fmt.Sprintf("\t// %s query constbind", rm.MethodName))
+	fmt.Fprintf(&sb, "\t// %s query constbind", rm.MethodName)
 	if rm.IsSlice {
 		// Add WRAP option for slice return types
-		sb.WriteString(fmt.Sprintf(" WRAP=(*%ss)", rm.RefTypeName))
+		fmt.Fprintf(&sb, " WRAP=(*%ss)", rm.RefTypeName)
 	}
 	sb.WriteString("\n")
 
@@ -642,7 +642,7 @@ func generateRelationMethodComment(rm *RelationMethod) string {
 	sql := fmt.Sprintf("SELECT * FROM %s WHERE %s = ${%s}",
 		rm.RefTableName, rm.WhereColumn, rm.ParamName)
 	formattedSQL := FormatSQL(sql)
-	sb.WriteString(fmt.Sprintf("\t/* %s */\n", formattedSQL))
+	fmt.Fprintf(&sb, "\t/* %s */\n", formattedSQL)
 
 	return sb.String()
 }
@@ -650,10 +650,10 @@ func generateRelationMethodComment(rm *RelationMethod) string {
 // generateRelationMethodSignature generates the method signature for a relation method.
 func generateRelationMethodSignature(pkg *Package, rm *RelationMethod) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("\t%s(ctx context.Context, %s %s) (",
-		rm.MethodName, rm.ParamName, formatType(pkg, rm.ParamType)))
+	fmt.Fprintf(&sb, "\t%s(ctx context.Context, %s %s) (",
+		rm.MethodName, rm.ParamName, formatType(pkg, rm.ParamType))
 	if rm.IsSlice {
-		sb.WriteString(fmt.Sprintf("[]%s", formatType(pkg, rm.RefType.(*types.Slice).Elem())))
+		fmt.Fprintf(&sb, "[]%s", formatType(pkg, rm.RefType.(*types.Slice).Elem()))
 	} else {
 		sb.WriteString(formatType(pkg, rm.RefType))
 	}
@@ -667,9 +667,9 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 
 	// Method signature
 	receiverName := strings.ToLower(cb.StructName[:1])
-	sb.WriteString(fmt.Sprintf("// %s Callback - loads related data\n", cb.StructName))
-	sb.WriteString(fmt.Sprintf("func (%s %s) Callback(ctx context.Context, q %s) error {\n",
-		receiverName, cb.StructTypeName, interfaceName))
+	fmt.Fprintf(&sb, "// %s Callback - loads related data\n", cb.StructName)
+	fmt.Fprintf(&sb, "func (%s %s) Callback(ctx context.Context, q %s) error {\n",
+		receiverName, cb.StructTypeName, interfaceName)
 
 	// Fail fast when callback cache context is missing.
 	sb.WriteString("\tif _, ok := ctx.Value(callbackCacheKey{}).(callbackCache); !ok {\n")
@@ -678,13 +678,13 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 
 	// Cache self first to prevent circular references
 	if cb.IDField != nil {
-		sb.WriteString(fmt.Sprintf("\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s)\n",
-			cb.IDField.DBName, receiverName, cb.IDField.GoName, receiverName))
+		fmt.Fprintf(&sb, "\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s)\n",
+			cb.IDField.DBName, receiverName, cb.IDField.GoName, receiverName)
 		// Also cache self under FK-based keys so belongs-to lookups from related structs find us
 		for _, field := range cb.Fields {
 			if field.IsSlice && field.CacheKey != cb.IDField.DBName {
-				sb.WriteString(fmt.Sprintf("\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s)\n",
-					field.CacheKey, receiverName, field.KeyFieldName, receiverName))
+					fmt.Fprintf(&sb, "\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s)\n",
+						field.CacheKey, receiverName, field.KeyFieldName, receiverName)
 			}
 		}
 		sb.WriteString("\n")
@@ -698,52 +698,52 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 			if aliasName == "" {
 				aliasName = field.FieldName
 			}
-			sb.WriteString(fmt.Sprintf("\tif cached, ok, err := requireCache[%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); err != nil {\n",
-				aliasName, field.CacheKey, receiverName, field.KeyFieldName))
+				fmt.Fprintf(&sb, "\tif cached, ok, err := requireCache[%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); err != nil {\n",
+					aliasName, field.CacheKey, receiverName, field.KeyFieldName)
 			sb.WriteString("\t\treturn err\n")
 			sb.WriteString("\t} else if ok {\n")
 			if field.FieldIsAlias {
-				sb.WriteString(fmt.Sprintf("\t\t%s.%s = cached\n", receiverName, field.FieldName))
-			} else {
-				sb.WriteString(fmt.Sprintf("\t\t%s.%s = %s(cached)\n", receiverName, field.FieldName, field.SliceType))
-			}
+					fmt.Fprintf(&sb, "\t\t%s.%s = cached\n", receiverName, field.FieldName)
+				} else {
+					fmt.Fprintf(&sb, "\t\t%s.%s = %s(cached)\n", receiverName, field.FieldName, field.SliceType)
+				}
 			sb.WriteString("\t} else {\n")
 			sb.WriteString("\t\tvar err error\n")
 			if field.FieldIsAlias {
-				sb.WriteString(fmt.Sprintf("\t\tvar tmp %s\n", field.SliceType))
-				sb.WriteString(fmt.Sprintf("\t\ttmp, err = q.%s(ctx, %s.%s)\n",
-					field.MethodName, receiverName, field.KeyFieldName))
+					fmt.Fprintf(&sb, "\t\tvar tmp %s\n", field.SliceType)
+					fmt.Fprintf(&sb, "\t\ttmp, err = q.%s(ctx, %s.%s)\n",
+						field.MethodName, receiverName, field.KeyFieldName)
 				sb.WriteString("\t\tif err != nil {\n")
 				sb.WriteString("\t\t\treturn err\n")
 				sb.WriteString("\t\t}\n")
-				sb.WriteString(fmt.Sprintf("\t\t%s.%s = %s(tmp)\n", receiverName, field.FieldName, aliasName))
-			} else {
-				sb.WriteString(fmt.Sprintf("\t\t%s.%s, err = q.%s(ctx, %s.%s)\n",
-					receiverName, field.FieldName, field.MethodName, receiverName, field.KeyFieldName))
+					fmt.Fprintf(&sb, "\t\t%s.%s = %s(tmp)\n", receiverName, field.FieldName, aliasName)
+				} else {
+					fmt.Fprintf(&sb, "\t\t%s.%s, err = q.%s(ctx, %s.%s)\n",
+						receiverName, field.FieldName, field.MethodName, receiverName, field.KeyFieldName)
 				sb.WriteString("\t\tif err != nil {\n")
 				sb.WriteString("\t\t\treturn err\n")
 				sb.WriteString("\t\t}\n")
 			}
-			sb.WriteString(fmt.Sprintf("\t\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s(%s.%s))\n",
-				field.CacheKey, receiverName, field.KeyFieldName, aliasName, receiverName, field.FieldName))
+				fmt.Fprintf(&sb, "\t\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s(%s.%s))\n",
+					field.CacheKey, receiverName, field.KeyFieldName, aliasName, receiverName, field.FieldName)
 			sb.WriteString("\t}\n\n")
 		} else {
 			// Many-to-one: check cache then query
 			refTypeName := field.RefTypeName
-			sb.WriteString(fmt.Sprintf("\tif cached, ok, err := requireCache[*%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); err != nil {\n",
-				refTypeName, field.CacheKey, receiverName, field.KeyFieldName))
+				fmt.Fprintf(&sb, "\tif cached, ok, err := requireCache[*%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); err != nil {\n",
+					refTypeName, field.CacheKey, receiverName, field.KeyFieldName)
 			sb.WriteString("\t\treturn err\n")
 			sb.WriteString("\t} else if ok {\n")
-			sb.WriteString(fmt.Sprintf("\t\t%s.%s = cached\n", receiverName, field.FieldName))
+				fmt.Fprintf(&sb, "\t\t%s.%s = cached\n", receiverName, field.FieldName)
 			sb.WriteString("\t} else {\n")
 			sb.WriteString("\t\tvar err error\n")
-			sb.WriteString(fmt.Sprintf("\t\t%s.%s, err = q.%s(ctx, %s.%s)\n",
-				receiverName, field.FieldName, field.MethodName, receiverName, field.KeyFieldName))
+				fmt.Fprintf(&sb, "\t\t%s.%s, err = q.%s(ctx, %s.%s)\n",
+					receiverName, field.FieldName, field.MethodName, receiverName, field.KeyFieldName)
 			sb.WriteString("\t\tif err != nil {\n")
 			sb.WriteString("\t\t\treturn err\n")
 			sb.WriteString("\t\t}\n")
-			sb.WriteString(fmt.Sprintf("\t\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s.%s)\n",
-				field.CacheKey, receiverName, field.KeyFieldName, receiverName, field.FieldName))
+				fmt.Fprintf(&sb, "\t\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s.%s)\n",
+					field.CacheKey, receiverName, field.KeyFieldName, receiverName, field.FieldName)
 			sb.WriteString("\t}\n\n")
 		}
 	}
@@ -760,11 +760,11 @@ func generateSliceCallbackMethod(alias *SliceTypeAlias, interfaceName string) st
 
 	// Method signature
 	receiverName := strings.ToLower(alias.AliasName[:1])
-	sb.WriteString(fmt.Sprintf("// %s Callback - iterates and calls each element's Callback\n", alias.AliasName))
-	sb.WriteString(fmt.Sprintf("func (%s *%s) Callback(ctx context.Context, q %s) error {\n",
-		receiverName, alias.AliasName, interfaceName))
+	fmt.Fprintf(&sb, "// %s Callback - iterates and calls each element's Callback\n", alias.AliasName)
+	fmt.Fprintf(&sb, "func (%s *%s) Callback(ctx context.Context, q %s) error {\n",
+		receiverName, alias.AliasName, interfaceName)
 
-	sb.WriteString(fmt.Sprintf("\tfor _, item := range *%s {\n", receiverName))
+	fmt.Fprintf(&sb, "\tfor _, item := range *%s {\n", receiverName)
 	sb.WriteString("\t\tif err := item.Callback(ctx, q); err != nil {\n")
 	sb.WriteString("\t\t\treturn err\n")
 	sb.WriteString("\t\t}\n")

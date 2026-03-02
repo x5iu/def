@@ -404,16 +404,16 @@ func generateWithClauseSQL(pkg *Package, clause WithClause) (string, error) {
 
 	if clause.Limit != nil {
 		if clause.Limit.IsParam {
-			sql.WriteString(fmt.Sprintf(" LIMIT ${%s}", clause.Limit.ParamName))
+			fmt.Fprintf(&sql, " LIMIT ${%s}", clause.Limit.ParamName)
 		} else {
-			sql.WriteString(fmt.Sprintf(" LIMIT %d", clause.Limit.Value))
+			fmt.Fprintf(&sql, " LIMIT %d", clause.Limit.Value)
 		}
 	}
 	if clause.Offset != nil {
 		if clause.Offset.IsParam {
-			sql.WriteString(fmt.Sprintf(" OFFSET ${%s}", clause.Offset.ParamName))
+			fmt.Fprintf(&sql, " OFFSET ${%s}", clause.Offset.ParamName)
 		} else {
-			sql.WriteString(fmt.Sprintf(" OFFSET %d", clause.Offset.Value))
+			fmt.Fprintf(&sql, " OFFSET %d", clause.Offset.Value)
 		}
 	}
 
@@ -562,7 +562,7 @@ func generateUpdateSQL(pkg *Package, method *MutationMethod) (string, error) {
 		sql.WriteString(withPrefix)
 		sql.WriteString(" ")
 	}
-	sql.WriteString(fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(setClause, ", ")))
+	fmt.Fprintf(&sql, "UPDATE %s SET %s", tableName, strings.Join(setClause, ", "))
 
 	if len(method.FromSources) > 0 {
 		sql.WriteString(" FROM ")
