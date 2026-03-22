@@ -114,10 +114,17 @@ func (s *myStorage) GetUserWithProjects(ctx context.Context, id int64) (*User, e
 
 ```go
 type User struct {
-    ID        int64     `db:"id" primary_key:"true"`
+    ID        int64     `db:"id" primary_key:"true" auto_increment:"true"`
     Name      string    `db:"name"`
     CreatedAt time.Time `db:"created_at"`
 }
+```
+
+Fields with `auto_increment:"true"` are excluded from entity-mode INSERT (`def.Create(entity)`).
+
+```go
+// Without auto_increment: INSERT includes id column
+// With auto_increment:"true": INSERT omits id column, database assigns it
 ```
 
 ### Relations (foreign_key + inverse)

@@ -1236,6 +1236,31 @@ func TestGenerateMutationSQL(t *testing.T) {
 			wantContains: []string{"(id, name, age)", "(${user.ID}, ${user.Name}, ${user.Age})"},
 			wantErr:      false,
 		},
+		{
+			name: "insert entity mode - auto_increment field excluded",
+			pkg: &Package{
+				Tables: map[string]*TableBinding{
+					"User": {
+						TypeName:  "User",
+						TableName: "users",
+						Fields: []FieldInfo{
+							{GoName: "ID", DBName: "id", IsPrimaryKey: true, IsAutoIncrement: true},
+							{GoName: "Name", DBName: "name"},
+							{GoName: "Age", DBName: "age"},
+						},
+					},
+				},
+			},
+			method: &MutationMethod{
+				Kind:        MethodKindCreate,
+				Name:        "CreateUser",
+				TargetType:  "User",
+				EntityParam: &ParamInfo{Name: "user"},
+			},
+			wantContains:    []string{"INSERT INTO users", "(name, age)", "(${user.Name}, ${user.Age})"},
+			wantNotContain: []string{"id", "${user.ID}"},
+			wantErr:         false,
+		},
 		// UPDATE entity mode tests
 		{
 			name: "update entity mode - primary key excluded from SET",

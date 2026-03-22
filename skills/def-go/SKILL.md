@@ -13,6 +13,7 @@ Produce valid `def` DSL that `def generate` can parse and emit as intended SQL c
 - Confirm `var _ = def.Init(def.BindTable[T]("table"), ...)` includes every table type you will reference.
 - Confirm struct fields used in SQL have `db:"column_name"` tags.
 - Confirm primary key fields have `primary_key:"true"` tags.
+- Confirm auto-increment primary key fields also have `auto_increment:"true"` tags (excluded from entity-mode INSERT).
 - Confirm relation fields have `db:"-" foreign_key:"column_name"` tags (and optionally `inverse:"FieldName"` for has-many).
 - Confirm imports:
   - `github.com/x5iu/def`
@@ -83,6 +84,7 @@ Produce valid `def` DSL that `def generate` can parse and emit as intended SQL c
 | `db:"column_name"` | DB column fields | Maps field to SQL column |
 | `db:"-"` | Relation / ignored fields | Excludes field from SQL columns |
 | `primary_key:"true"` | ID fields | Marks primary key for relation queries |
+| `auto_increment:"true"` | Auto-increment ID fields | Excludes field from entity-mode INSERT |
 | `foreign_key:"column_name"` | Relation fields (`db:"-"`) | Specifies which column is the FK; defines belongs-to |
 | `inverse:"FieldName"` | Relation fields with `foreign_key` | Names the has-many field on the referenced struct |
 

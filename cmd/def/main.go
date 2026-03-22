@@ -38,9 +38,10 @@ func newRootCommand() *cobra.Command {
 with def.Query, def.Create, def.Update, def.Delete definitions and generates
 interface definitions with SQL comments.
 
-It parses struct definitions with 'db' and 'foreign_key' tags, reads table
-bindings from def.Init + def.BindTable[T]("table") calls, and analyzes
-expressions to generate SQL statements (SELECT, INSERT, UPDATE, DELETE).`,
+It parses struct definitions with 'db', 'primary_key', 'auto_increment', and
+'foreign_key' tags, reads table bindings from def.Init + def.BindTable[T]("table")
+calls, and analyzes expressions to generate SQL statements (SELECT, INSERT,
+UPDATE, DELETE).`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}

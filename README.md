@@ -92,7 +92,7 @@ Define database table structures using the `db` tag for column mapping:
 
 ```go
 type User struct {
-    ID   int64  `db:"id"`
+    ID   int64  `db:"id" primary_key:"true" auto_increment:"true"`
     Name string `db:"name"`
     Age  uint8  `db:"age"`
 
@@ -100,6 +100,8 @@ type User struct {
     Projects []*Project `db:"-"`
 }
 ```
+
+Fields tagged with `auto_increment:"true"` are automatically excluded from entity-mode INSERT statements (`def.Create(entity)`), letting the database assign the value.
 
 ### Foreign Key Relationships
 

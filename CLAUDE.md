@@ -102,6 +102,7 @@ Flags: `-o` (output file), `--tags` (build tags), `-T/--interface` (interface na
 |-----|---------|---------|
 | `db` | Column mapping (`-` for non-DB fields) | `db:"user_id"` |
 | `primary_key` | Required for subquery/Callback generation | `primary_key:"true"` |
+| `auto_increment` | Excludes field from entity-mode INSERT | `auto_increment:"true"` |
 | `foreign_key` | Defines relationship, references local FK column | `foreign_key:"user_id"` |
 | `inverse` | Custom has-many field name on referenced table (used with `foreign_key`) | `inverse:"Endpoints"` |
 

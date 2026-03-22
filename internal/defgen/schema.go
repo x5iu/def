@@ -40,15 +40,17 @@ func parseStructTags(structType *types.Struct) (fields []FieldInfo, foreignKeys 
 			continue
 		}
 
-		// Parse primary_key tag
+		// Parse primary_key and auto_increment tags
 		pkTag := st.Get("primary_key")
+		aiTag := st.Get("auto_increment")
 
 		// Regular database field
 		fi := FieldInfo{
-			GoName:       field.Name(),
-			DBName:       dbTag,
-			Type:         field.Type(),
-			IsPrimaryKey: pkTag == "true",
+			GoName:          field.Name(),
+			DBName:          dbTag,
+			Type:            field.Type(),
+			IsPrimaryKey:    pkTag == "true",
+			IsAutoIncrement: aiTag == "true",
 		}
 		fields = append(fields, fi)
 	}

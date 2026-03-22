@@ -147,11 +147,11 @@ Fix:
 ### Entity mode insert includes ID / auto-generated columns
 
 Cause:
-- `def.Create(entity)` inserts ALL fields with `db` tags, including `id`.
+- `def.Create(entity)` inserts ALL fields with `db` tags, including `id`, unless the field is marked with `auto_increment:"true"`.
 
 Fix:
-- Use field mode with explicit `def.Set(...)` to omit auto-generated columns.
-- Or ensure the database handles zero-value IDs correctly (e.g., SQLite `INTEGER PRIMARY KEY AUTOINCREMENT` treats NULL as auto-assign).
+- Add `auto_increment:"true"` tag to the field: `db:"id" primary_key:"true" auto_increment:"true"`.
+- Or use field mode with explicit `def.Set(...)` to omit auto-generated columns.
 
 ## SQL Shape Mismatch Tips
 

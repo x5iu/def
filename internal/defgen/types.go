@@ -11,7 +11,8 @@ type FieldInfo struct {
 	GoName       string // Go field name, e.g., "ID"
 	DBName       string // Database column name from db tag, e.g., "id"
 	Type         types.Type
-	IsPrimaryKey bool // true if this field has primary_key:"true" tag
+	IsPrimaryKey    bool // true if this field has primary_key:"true" tag
+	IsAutoIncrement bool // true if this field has auto_increment:"true" tag
 }
 
 // ForeignKeyInfo represents a foreign key relationship.

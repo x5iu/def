@@ -278,6 +278,9 @@ func generateInsertSQL(pkg *Package, method *MutationMethod) (string, error) {
 		var columns []string
 		var values []string
 		for _, field := range binding.Fields {
+			if field.IsAutoIncrement {
+				continue
+			}
 			columns = append(columns, field.DBName)
 			values = append(values, fmt.Sprintf("${%s.%s}", method.EntityParam.Name, field.GoName))
 		}
