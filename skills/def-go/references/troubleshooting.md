@@ -117,6 +117,42 @@ Cause:
 Fix:
 - Use an integer literal or a method parameter name.
 
+### `undefined: WithCache` / `undefined: Callback`
+
+Cause:
+- Business logic file references generated symbols before `def generate` has been run.
+- Or the build tag setup is wrong — source and generated files are not properly separated.
+
+Fix:
+- Run `def generate --tags <tag> --defc-generate .` first to produce generated files.
+- Ensure source file has `//go:build <tag>`, business logic file has `//go:build !<tag>`.
+- Generated files automatically get `//go:build !<tag>`.
+
+### `callback requires WithCache context`
+
+Cause:
+- Called `entity.Callback(ctx, store)` without initializing the cache context.
+
+Fix:
+- Call `ctx = WithCache(ctx)` before any `Callback` call.
+
+### `def generate` fails with type errors from business logic file
+
+Cause:
+- Business logic file (which uses `WithCache`, `Callback`, `NewXxxStore`) is being loaded during `def generate`.
+
+Fix:
+- Add `//go:build !<tag>` to the business logic file so it is excluded when `def generate --tags <tag>` runs.
+
+### Entity mode insert includes ID / auto-generated columns
+
+Cause:
+- `def.Create(entity)` inserts ALL fields with `db` tags, including `id`.
+
+Fix:
+- Use field mode with explicit `def.Set(...)` to omit auto-generated columns.
+- Or ensure the database handles zero-value IDs correctly (e.g., SQLite `INTEGER PRIMARY KEY AUTOINCREMENT` treats NULL as auto-assign).
+
 ## SQL Shape Mismatch Tips
 
 - Query result order does not change after adding `def.OrderBy(...)`:
