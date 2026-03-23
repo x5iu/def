@@ -285,13 +285,14 @@ type CallbackMethod struct {
 
 // CallbackField represents a field to populate in Callback.
 type CallbackField struct {
-	FieldName     string // e.g., "User"
-	MethodName    string // e.g., "getUserByID"
-	KeyFieldName  string // e.g., "UserID"
-	IsSlice       bool   // true for one-to-many
-	CacheKey      string // e.g., "user_id" for building cache key
-	RefTypeName   string // actual Go type name from BindTable (e.g., "User" for field "Author *User")
-	AliasTypeName string // slice type alias name for cache (e.g., "ModelEndpointRows"); only set for has-many
+	FieldName     string     // e.g., "User"
+	MethodName    string     // e.g., "getUserByID"
+	KeyFieldName  string     // e.g., "UserID"
+	KeyFieldType  types.Type // type of the FK field (e.g., *int64, sql.NullInt64); nil for has-many
+	IsSlice       bool       // true for one-to-many
+	CacheKey      string     // e.g., "user_id" for building cache key
+	RefTypeName   string     // actual Go type name from BindTable (e.g., "User" for field "Author *User")
+	AliasTypeName string     // slice type alias name for cache (e.g., "ModelEndpointRows"); only set for has-many
 
 	// For slice fields (has-many), SliceType is the underlying slice type (e.g., "[]*Project").
 	// FieldIsAlias indicates whether the struct field type is the generated alias type (e.g., "Projects").

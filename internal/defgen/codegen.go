@@ -730,21 +730,34 @@ func generateCallbackMethod(cb *CallbackMethod, interfaceName string) string {
 		} else {
 			// Many-to-one: check cache then query
 			refTypeName := field.RefTypeName
-				fmt.Fprintf(&sb, "\tif cached, ok, err := requireCache[*%s](ctx, fmt.Sprintf(\"%s:%%v\", %s.%s)); err != nil {\n",
-					refTypeName, field.CacheKey, receiverName, field.KeyFieldName)
-			sb.WriteString("\t\treturn err\n")
-			sb.WriteString("\t} else if ok {\n")
-				fmt.Fprintf(&sb, "\t\t%s.%s = cached\n", receiverName, field.FieldName)
-			sb.WriteString("\t} else {\n")
-			sb.WriteString("\t\tvar err error\n")
-				fmt.Fprintf(&sb, "\t\t%s.%s, err = q.%s(ctx, %s.%s)\n",
-					receiverName, field.FieldName, field.MethodName, receiverName, field.KeyFieldName)
-			sb.WriteString("\t\tif err != nil {\n")
-			sb.WriteString("\t\t\treturn err\n")
-			sb.WriteString("\t\t}\n")
-				fmt.Fprintf(&sb, "\t\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s.%s), %s.%s)\n",
-					field.CacheKey, receiverName, field.KeyFieldName, receiverName, field.FieldName)
-			sb.WriteString("\t}\n\n")
+			fkVar := receiverName + "." + field.KeyFieldName
+			ni := nullableInfo(field.KeyFieldType)
+			valueExpr := fkVar
+			indent := "\t"
+			if ni.IsNullable {
+				valueExpr = ni.ValueExpr(fkVar)
+				fmt.Fprintf(&sb, "\tif %s {\n", ni.CheckExpr(fkVar))
+				indent = "\t\t"
+			}
+			fmt.Fprintf(&sb, "%sif cached, ok, err := requireCache[*%s](ctx, fmt.Sprintf(\"%s:%%v\", %s)); err != nil {\n",
+				indent, refTypeName, field.CacheKey, valueExpr)
+			fmt.Fprintf(&sb, "%s\treturn err\n", indent)
+			fmt.Fprintf(&sb, "%s} else if ok {\n", indent)
+			fmt.Fprintf(&sb, "%s\t%s.%s = cached\n", indent, receiverName, field.FieldName)
+			fmt.Fprintf(&sb, "%s} else {\n", indent)
+			fmt.Fprintf(&sb, "%s\tvar err error\n", indent)
+			fmt.Fprintf(&sb, "%s\t%s.%s, err = q.%s(ctx, %s)\n",
+				indent, receiverName, field.FieldName, field.MethodName, valueExpr)
+			fmt.Fprintf(&sb, "%s\tif err != nil {\n", indent)
+			fmt.Fprintf(&sb, "%s\t\treturn err\n", indent)
+			fmt.Fprintf(&sb, "%s\t}\n", indent)
+			fmt.Fprintf(&sb, "%s\tsetCache(ctx, fmt.Sprintf(\"%s:%%v\", %s), %s.%s)\n",
+				indent, field.CacheKey, valueExpr, receiverName, field.FieldName)
+			fmt.Fprintf(&sb, "%s}\n", indent)
+			if ni.IsNullable {
+				sb.WriteString("\t}\n")
+			}
+			sb.WriteString("\n")
 		}
 	}
 

@@ -2004,6 +2004,211 @@ func TestGenerateCallbackMethod_PrecacheSelfByHasManyForeignKey(t *testing.T) {
 	}
 }
 
+func TestGenerateCallbackMethod_NullablePointerFK(t *testing.T) {
+	cb := &CallbackMethod{
+		StructName:     "Session",
+		StructTypeName: "*Session",
+		IDField: &FieldInfo{
+			GoName: "ID",
+			DBName: "id",
+		},
+		Fields: []CallbackField{
+			{
+				FieldName:    "Parent",
+				RefTypeName:  "Session",
+				MethodName:   "getSessionByID",
+				KeyFieldName: "ParentID",
+				KeyFieldType: types.NewPointer(types.Typ[types.Int64]),
+				IsSlice:      false,
+				CacheKey:     "parent_id",
+			},
+		},
+	}
+
+	got := generateCallbackMethod(cb, "Repo")
+
+	// Should have a null guard
+	if !strings.Contains(got, "if s.ParentID != nil {") {
+		t.Errorf("should wrap nullable FK in nil check.\nGot:\n%s", got)
+	}
+	// Should dereference pointer in method call
+	if !strings.Contains(got, "q.getSessionByID(ctx, *s.ParentID)") {
+		t.Errorf("should dereference pointer FK in method call.\nGot:\n%s", got)
+	}
+	// Should dereference pointer in cache key
+	if !strings.Contains(got, "fmt.Sprintf(\"parent_id:%v\", *s.ParentID)") {
+		t.Errorf("should dereference pointer FK in cache key.\nGot:\n%s", got)
+	}
+}
+
+func TestGenerateCallbackMethod_NullableSqlNullFK(t *testing.T) {
+	// Build a sql.NullInt64 named type
+	sqlPkg := types.NewPackage("database/sql", "sql")
+	nullInt64Fields := []*types.Var{
+		types.NewVar(token.NoPos, sqlPkg, "Int64", types.Typ[types.Int64]),
+		types.NewVar(token.NoPos, sqlPkg, "Valid", types.Typ[types.Bool]),
+	}
+	nullInt64Struct := types.NewStruct(nullInt64Fields, nil)
+	nullInt64Named := types.NewNamed(types.NewTypeName(token.NoPos, sqlPkg, "NullInt64", nil), nullInt64Struct, nil)
+
+	cb := &CallbackMethod{
+		StructName:     "Session",
+		StructTypeName: "*Session",
+		IDField: &FieldInfo{
+			GoName: "ID",
+			DBName: "id",
+		},
+		Fields: []CallbackField{
+			{
+				FieldName:    "Parent",
+				RefTypeName:  "Session",
+				MethodName:   "getSessionByID",
+				KeyFieldName: "ParentID",
+				KeyFieldType: nullInt64Named,
+				IsSlice:      false,
+				CacheKey:     "parent_id",
+			},
+		},
+	}
+
+	got := generateCallbackMethod(cb, "Repo")
+
+	// Should have a Valid guard
+	if !strings.Contains(got, "if s.ParentID.Valid {") {
+		t.Errorf("should check .Valid for sql.NullInt64.\nGot:\n%s", got)
+	}
+	// Should access .Int64 in method call
+	if !strings.Contains(got, "q.getSessionByID(ctx, s.ParentID.Int64)") {
+		t.Errorf("should access .Int64 field for sql.NullInt64.\nGot:\n%s", got)
+	}
+	// Should access .Int64 in cache key
+	if !strings.Contains(got, "fmt.Sprintf(\"parent_id:%v\", s.ParentID.Int64)") {
+		t.Errorf("should access .Int64 field in cache key.\nGot:\n%s", got)
+	}
+}
+
+func TestNullableInfo(t *testing.T) {
+	// nil type
+	ni := nullableInfo(nil)
+	if ni.IsNullable {
+		t.Error("nil type should not be nullable")
+	}
+
+	// basic int64 — not nullable
+	ni = nullableInfo(types.Typ[types.Int64])
+	if ni.IsNullable {
+		t.Error("int64 should not be nullable")
+	}
+
+	// *int64
+	ni = nullableInfo(types.NewPointer(types.Typ[types.Int64]))
+	if !ni.IsNullable {
+		t.Fatal("*int64 should be nullable")
+	}
+	if got := ni.CheckExpr("x"); got != "x != nil" {
+		t.Errorf("*int64 CheckExpr = %q, want %q", got, "x != nil")
+	}
+	if got := ni.ValueExpr("x"); got != "*x" {
+		t.Errorf("*int64 ValueExpr = %q, want %q", got, "*x")
+	}
+
+	// sql.NullInt64
+	sqlPkg := types.NewPackage("database/sql", "sql")
+	nullInt64Fields := []*types.Var{
+		types.NewVar(token.NoPos, sqlPkg, "Int64", types.Typ[types.Int64]),
+		types.NewVar(token.NoPos, sqlPkg, "Valid", types.Typ[types.Bool]),
+	}
+	nullInt64Struct := types.NewStruct(nullInt64Fields, nil)
+	nullInt64Named := types.NewNamed(types.NewTypeName(token.NoPos, sqlPkg, "NullInt64", nil), nullInt64Struct, nil)
+
+	ni = nullableInfo(nullInt64Named)
+	if !ni.IsNullable {
+		t.Fatal("sql.NullInt64 should be nullable")
+	}
+	if got := ni.CheckExpr("x"); got != "x.Valid" {
+		t.Errorf("sql.NullInt64 CheckExpr = %q, want %q", got, "x.Valid")
+	}
+	if got := ni.ValueExpr("x"); got != "x.Int64" {
+		t.Errorf("sql.NullInt64 ValueExpr = %q, want %q", got, "x.Int64")
+	}
+
+	// sql.Null[T] (generic)
+	nullGenericFields := []*types.Var{
+		types.NewVar(token.NoPos, sqlPkg, "V", types.Typ[types.Int64]),
+		types.NewVar(token.NoPos, sqlPkg, "Valid", types.Typ[types.Bool]),
+	}
+	nullGenericStruct := types.NewStruct(nullGenericFields, nil)
+	nullGenericNamed := types.NewNamed(types.NewTypeName(token.NoPos, sqlPkg, "Null", nil), nullGenericStruct, nil)
+
+	ni = nullableInfo(nullGenericNamed)
+	if !ni.IsNullable {
+		t.Fatal("sql.Null[T] should be nullable")
+	}
+	if got := ni.CheckExpr("x"); got != "x.Valid" {
+		t.Errorf("sql.Null[T] CheckExpr = %q, want %q", got, "x.Valid")
+	}
+	if got := ni.ValueExpr("x"); got != "x.V" {
+		t.Errorf("sql.Null[T] ValueExpr = %q, want %q", got, "x.V")
+	}
+
+	// sql.NullString
+	nullStringFields := []*types.Var{
+		types.NewVar(token.NoPos, sqlPkg, "String", types.Typ[types.String]),
+		types.NewVar(token.NoPos, sqlPkg, "Valid", types.Typ[types.Bool]),
+	}
+	nullStringStruct := types.NewStruct(nullStringFields, nil)
+	nullStringNamed := types.NewNamed(types.NewTypeName(token.NoPos, sqlPkg, "NullString", nil), nullStringStruct, nil)
+
+	ni = nullableInfo(nullStringNamed)
+	if !ni.IsNullable {
+		t.Fatal("sql.NullString should be nullable")
+	}
+	if got := ni.ValueExpr("x"); got != "x.String" {
+		t.Errorf("sql.NullString ValueExpr = %q, want %q", got, "x.String")
+	}
+
+	// Named type from non-sql package — not nullable
+	otherPkg := types.NewPackage("example.com/foo", "foo")
+	otherNamed := types.NewNamed(types.NewTypeName(token.NoPos, otherPkg, "NullInt64", nil), types.Typ[types.Int64], nil)
+	ni = nullableInfo(otherNamed)
+	if ni.IsNullable {
+		t.Error("NullInt64 from non-sql package should not be nullable")
+	}
+}
+
+func TestGenerateCallbackMethod_NonNullableFK(t *testing.T) {
+	// Ensure non-nullable FK (nil KeyFieldType) still works correctly
+	cb := &CallbackMethod{
+		StructName:     "Project",
+		StructTypeName: "*Project",
+		IDField: &FieldInfo{
+			GoName: "ID",
+			DBName: "id",
+		},
+		Fields: []CallbackField{
+			{
+				FieldName:    "User",
+				RefTypeName:  "User",
+				MethodName:   "getUserByID",
+				KeyFieldName: "UserID",
+				IsSlice:      false,
+				CacheKey:     "user_id",
+			},
+		},
+	}
+
+	got := generateCallbackMethod(cb, "Querier")
+
+	// Should NOT have a null guard
+	if strings.Contains(got, "if p.UserID != nil") || strings.Contains(got, "if p.UserID.Valid") {
+		t.Errorf("non-nullable FK should not have null guard.\nGot:\n%s", got)
+	}
+	// Should directly pass FK value
+	if !strings.Contains(got, "q.getUserByID(ctx, p.UserID)") {
+		t.Errorf("non-nullable FK should pass value directly.\nGot:\n%s", got)
+	}
+}
+
 func TestCallbackWithoutCache_ReturnsError(t *testing.T) {
 	pkg := &Package{
 		PkgName: "testpkg",

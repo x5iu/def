@@ -172,22 +172,23 @@ func addCallbackField(callbackMap map[string]*CallbackMethod, table *TableBindin
 		callbackMap[table.TypeName] = cb
 	}
 
-	// Find the key field name in the source table (e.g., UserID for foreign_key:"user_id")
-	keyFieldName := ""
-	for _, field := range table.Fields {
-		if field.DBName == fk.KeyColumn {
-			keyFieldName = field.GoName
+	// Find the key field in the source table (e.g., UserID for foreign_key:"user_id")
+	var keyField *FieldInfo
+	for i := range table.Fields {
+		if table.Fields[i].DBName == fk.KeyColumn {
+			keyField = &table.Fields[i]
 			break
 		}
 	}
-	if keyFieldName == "" {
+	if keyField == nil {
 		return
 	}
 
 	cb.Fields = append(cb.Fields, CallbackField{
 		FieldName:    fk.FieldName,
 		MethodName:   belongsTo.MethodName,
-		KeyFieldName: keyFieldName,
+		KeyFieldName: keyField.GoName,
+		KeyFieldType: keyField.Type,
 		IsSlice:      false,
 		CacheKey:     fk.KeyColumn,
 		RefTypeName:  belongsTo.RefTypeName,

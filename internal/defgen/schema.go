@@ -412,3 +412,76 @@ func buildSignature(pkg *Package, ft *ast.FuncType) string {
 
 	return sb.String()
 }
+
+// nullableAccessInfo describes how to null-check and extract a value from a
+// nullable type (pointer or sql.Null* / sql.Null[T]).
+type nullableAccessInfo struct {
+	// IsNullable is true when the type requires a null guard.
+	IsNullable bool
+	// CheckExpr returns a Go expression that evaluates to true when non-null.
+	// varExpr is the Go expression for the field (e.g., "s.ParentID").
+	CheckExpr func(varExpr string) string
+	// ValueExpr returns a Go expression that extracts the underlying value.
+	ValueExpr func(varExpr string) string
+}
+
+// nullableInfo inspects a types.Type and returns access information for
+// nullable types: *T, sql.NullInt16/32/64, sql.NullFloat64, sql.NullString,
+// sql.NullBool, sql.NullByte, sql.NullTime, and the generic sql.Null[T].
+func nullableInfo(t types.Type) nullableAccessInfo {
+	if t == nil {
+		return nullableAccessInfo{}
+	}
+
+	// Pointer type: *T
+	if _, ok := t.(*types.Pointer); ok {
+		return nullableAccessInfo{
+			IsNullable: true,
+			CheckExpr:  func(v string) string { return v + " != nil" },
+			ValueExpr:  func(v string) string { return "*" + v },
+		}
+	}
+
+	// Named type: sql.Null*
+	named, ok := t.(*types.Named)
+	if !ok {
+		return nullableAccessInfo{}
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != "database/sql" {
+		return nullableAccessInfo{}
+	}
+
+	typeName := obj.Name()
+
+	// sql.Null[T] (generic, Go 1.22+)
+	if typeName == "Null" {
+		return nullableAccessInfo{
+			IsNullable: true,
+			CheckExpr:  func(v string) string { return v + ".Valid" },
+			ValueExpr:  func(v string) string { return v + ".V" },
+		}
+	}
+
+	// Classic sql.Null* types: map type name to value field name.
+	valueFields := map[string]string{
+		"NullBool":    "Bool",
+		"NullByte":    "Byte",
+		"NullFloat64": "Float64",
+		"NullInt16":   "Int16",
+		"NullInt32":   "Int32",
+		"NullInt64":   "Int64",
+		"NullString":  "String",
+		"NullTime":    "Time",
+	}
+
+	if field, ok := valueFields[typeName]; ok {
+		return nullableAccessInfo{
+			IsNullable: true,
+			CheckExpr:  func(v string) string { return v + ".Valid" },
+			ValueExpr:  func(v string) string { return v + "." + field },
+		}
+	}
+
+	return nullableAccessInfo{}
+}
